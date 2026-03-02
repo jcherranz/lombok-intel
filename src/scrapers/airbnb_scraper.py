@@ -73,7 +73,7 @@ def _check_in_out() -> tuple[str, str]:
 
 
 def _subdivide_box(
-    ne_lat: float, ne_lng: float, sw_lat: float, sw_lng: float
+    ne_lat: float, ne_long: float, sw_lat: float, sw_long: float
 ) -> list[dict[str, float]]:
     """Split a bounding box into 4 equal quadrants.
 
@@ -81,12 +81,12 @@ def _subdivide_box(
     suggesting there are more listings that were not returned.
     """
     mid_lat = (ne_lat + sw_lat) / 2
-    mid_lng = (ne_lng + sw_lng) / 2
+    mid_long = (ne_long + sw_long) / 2
     return [
-        {"ne_lat": ne_lat, "ne_lng": ne_lng, "sw_lat": mid_lat, "sw_lng": mid_lng},  # NE quadrant
-        {"ne_lat": ne_lat, "ne_lng": mid_lng, "sw_lat": mid_lat, "sw_lng": sw_lng},  # NW quadrant
-        {"ne_lat": mid_lat, "ne_lng": ne_lng, "sw_lat": sw_lat, "sw_lng": mid_lng},  # SE quadrant
-        {"ne_lat": mid_lat, "ne_lng": mid_lng, "sw_lat": sw_lat, "sw_lng": sw_lng},  # SW quadrant
+        {"ne_lat": ne_lat, "ne_long": ne_long, "sw_lat": mid_lat, "sw_long": mid_long},  # NE quadrant
+        {"ne_lat": ne_lat, "ne_long": mid_long, "sw_lat": mid_lat, "sw_long": sw_long},  # NW quadrant
+        {"ne_lat": mid_lat, "ne_long": ne_long, "sw_lat": sw_lat, "sw_long": mid_long},  # SE quadrant
+        {"ne_lat": mid_lat, "ne_long": mid_long, "sw_lat": sw_lat, "sw_long": sw_long},  # SW quadrant
     ]
 
 
@@ -103,14 +103,23 @@ class AirbnbScraper:
 
     def __init__(self, db_path=None, proxy_url: str | None = None):
         self.db_path = db_path or DB_PATH
-        self.proxy_url = proxy_url
+        self.proxy_url = proxy_url or ""
         self.conn: sqlite3.Connection | None = None
+        self._api_key: str | None = None
 
         # Counters for the current run
         self._listings_seen = 0
         self._listings_new = 0
         self._snapshots_added = 0
         self._errors: list[str] = []
+
+    def _get_api_key(self) -> str:
+        """Fetch and cache the Airbnb API key needed for calendar/details calls."""
+        if self._api_key is None:
+            logger.info("Fetching Airbnb API key...")
+            self._api_key = pyairbnb.get_api_key(proxy_url=self.proxy_url)
+            logger.info("API key obtained.")
+        return self._api_key
 
     # ------------------------------------------------------------------
     # Database helpers
@@ -170,14 +179,17 @@ class AirbnbScraper:
         """Upsert a single listing into airbnb_listings.
 
         Returns True if the listing was newly inserted, False if updated.
+        Handles both search_all() result format and get_details() format.
         """
         conn = self._get_conn()
-        listing_id = str(data.get("id", ""))
+        listing_id = str(data.get("room_id") or data.get("id") or "")
         if not listing_id:
             return False
 
-        lat = _safe_float(data.get("lat") or data.get("latitude"))
-        lng = _safe_float(data.get("lng") or data.get("longitude"))
+        coords = data.get("coordinates", {})
+        lat = _safe_float(coords.get("latitude") or data.get("lat") or data.get("latitude"))
+        # Note: pyairbnb has a typo — "longitud" instead of "longitude"
+        lng = _safe_float(coords.get("longitud") or coords.get("longitude") or data.get("lng") or data.get("longitude"))
         zone_id = assign_zone(lat, lng)
 
         now = now_iso()
@@ -259,30 +271,47 @@ class AirbnbScraper:
                 data.get("url", f"https://www.airbnb.com/rooms/{listing_id}"),
                 data.get("name"),
                 data.get("description"),
-                data.get("property_type") or data.get("type"),
+                # "title" from search has format "Tiny home in Pujut"
+                data.get("property_type") or data.get("type") or (data.get("title", "").split(" in ")[0] if data.get("title") else None),
                 data.get("room_type"),
                 lat,
                 lng,
                 zone_id,
-                data.get("neighborhood"),
+                data.get("neighborhood") or (data.get("title", "").split(" in ")[-1] if " in " in data.get("title", "") else None),
                 _safe_int(data.get("accommodates") or data.get("person_capacity")),
                 _safe_int(data.get("bedrooms")),
                 _safe_int(data.get("beds")),
                 _safe_float(data.get("bathrooms")),
-                _safe_float(data.get("price") or data.get("nightly_price")),
-                _safe_float(data.get("cleaning_fee")),
+                # Price from search is nested: price.unit.amount
+                _safe_float(
+                    data.get("nightly_price")
+                    or (data.get("price", {}).get("unit", {}).get("amount") if isinstance(data.get("price"), dict) else data.get("price"))
+                ),
+                _safe_float(
+                    data.get("cleaning_fee")
+                    or (data.get("fee", {}).get("cleaning", {}).get("amount") if isinstance(data.get("fee"), dict) else None)
+                ),
                 data.get("currency", AIRBNB_CURRENCY),
                 str(data.get("host_id", "")) or None,
                 data.get("host_name"),
                 _bool_to_int(data.get("is_superhost") or data.get("superhost")),
-                _safe_float(data.get("rating") or data.get("rating_overall")),
+                # Rating from search is nested: rating.value
+                _safe_float(
+                    data.get("rating_overall")
+                    or (data.get("rating", {}).get("value") if isinstance(data.get("rating"), dict) else data.get("rating"))
+                ),
                 _safe_float(data.get("rating_accuracy")),
                 _safe_float(data.get("rating_checkin")),
                 _safe_float(data.get("rating_cleanliness")),
                 _safe_float(data.get("rating_communication")),
                 _safe_float(data.get("rating_location")),
                 _safe_float(data.get("rating_value")),
-                _safe_int(data.get("review_count") or data.get("reviews_count")),
+                # Review count from search is nested: rating.reviewCount (as string)
+                _safe_int(
+                    data.get("review_count")
+                    or data.get("reviews_count")
+                    or (data.get("rating", {}).get("reviewCount") if isinstance(data.get("rating"), dict) else None)
+                ),
                 _safe_float(data.get("reviews_per_month")),
                 _bool_to_int(data.get("instant_bookable")),
                 _safe_int(data.get("minimum_nights")),
@@ -351,7 +380,7 @@ class AirbnbScraper:
         reraise=True,
     )
     def _search_area(
-        self, ne_lat: float, ne_lng: float, sw_lat: float, sw_lng: float
+        self, ne_lat: float, ne_long: float, sw_lat: float, sw_long: float
     ) -> list[dict]:
         """Search a bounding box with retry and rate limiting."""
         check_in, check_out = _check_in_out()
@@ -360,10 +389,12 @@ class AirbnbScraper:
             check_in=check_in,
             check_out=check_out,
             ne_lat=ne_lat,
-            ne_lng=ne_lng,
+            ne_long=ne_long,
             sw_lat=sw_lat,
-            sw_lng=sw_lng,
+            sw_long=sw_long,
             zoom_value=2,
+            price_min=0,
+            price_max=10000,
             currency=AIRBNB_CURRENCY,
             proxy_url=self.proxy_url,
         )
@@ -380,8 +411,8 @@ class AirbnbScraper:
         """Fetch full listing details with retry and rate limiting."""
         check_in, check_out = _check_in_out()
         rate_limit()
-        details = pyairbnb.get_listing_details(
-            listing_id=listing_id,
+        details = pyairbnb.get_details(
+            room_id=int(listing_id),
             check_in=check_in,
             check_out=check_out,
             currency=AIRBNB_CURRENCY,
@@ -399,8 +430,10 @@ class AirbnbScraper:
     def _fetch_calendar(self, listing_id: str) -> list[dict]:
         """Fetch calendar data with retry and rate limiting."""
         rate_limit()
+        api_key = self._get_api_key()
         cal = pyairbnb.get_calendar(
-            listing_id=listing_id,
+            api_key=api_key,
+            room_id=listing_id,
             proxy_url=self.proxy_url,
         )
         return cal if cal else []
@@ -410,7 +443,7 @@ class AirbnbScraper:
     # ------------------------------------------------------------------
 
     def _search_zone_box(
-        self, zone_id: str, ne_lat: float, ne_lng: float, sw_lat: float, sw_lng: float,
+        self, zone_id: str, ne_lat: float, ne_long: float, sw_lat: float, sw_long: float,
         depth: int = 0,
     ) -> dict[str, dict]:
         """Search a bounding box, subdividing if we hit the result cap.
@@ -422,22 +455,22 @@ class AirbnbScraper:
         found: dict[str, dict] = {}
 
         try:
-            results = self._search_area(ne_lat, ne_lng, sw_lat, sw_lng)
+            results = self._search_area(ne_lat, ne_long, sw_lat, sw_long)
         except Exception as e:
             logger.error(
                 "Search failed for zone %s box (%.4f,%.4f)-(%.4f,%.4f): %s",
-                zone_id, sw_lat, sw_lng, ne_lat, ne_lng, e,
+                zone_id, sw_lat, sw_long, ne_lat, ne_long, e,
             )
             self._errors.append(f"Search failed for {zone_id}: {e}")
             return found
 
         logger.info(
             "Zone %s box (depth=%d): %d results from (%.4f,%.4f)-(%.4f,%.4f)",
-            zone_id, depth, len(results), sw_lat, sw_lng, ne_lat, ne_lng,
+            zone_id, depth, len(results), sw_lat, sw_long, ne_lat, ne_long,
         )
 
         for r in results:
-            lid = str(r.get("id", ""))
+            lid = str(r.get("room_id") or r.get("id") or "")
             if lid:
                 found[lid] = r
 
@@ -447,12 +480,12 @@ class AirbnbScraper:
                 "Zone %s hit result cap (%d). Subdividing (depth %d -> %d).",
                 zone_id, len(results), depth, depth + 1,
             )
-            sub_boxes = _subdivide_box(ne_lat, ne_lng, sw_lat, sw_lng)
+            sub_boxes = _subdivide_box(ne_lat, ne_long, sw_lat, sw_long)
             for box in sub_boxes:
                 sub_results = self._search_zone_box(
                     zone_id,
-                    box["ne_lat"], box["ne_lng"],
-                    box["sw_lat"], box["sw_lng"],
+                    box["ne_lat"], box["ne_long"],
+                    box["sw_lat"], box["sw_long"],
                     depth=depth + 1,
                 )
                 found.update(sub_results)
@@ -474,9 +507,9 @@ class AirbnbScraper:
             zone_listings = self._search_zone_box(
                 zone_id,
                 ne_lat=bounds["lat_max"],
-                ne_lng=bounds["lng_max"],
+                ne_long=bounds["lng_max"],
                 sw_lat=bounds["lat_min"],
-                sw_lng=bounds["lng_min"],
+                sw_long=bounds["lng_min"],
             )
 
             zone_new = 0
@@ -509,9 +542,10 @@ class AirbnbScraper:
                 zone_id, len(zone_listings), zone_new,
             )
 
-        # Attempt to enrich listings with detailed data (sub-ratings, amenities, etc.)
-        # Only fetch details for newly discovered listings to save API calls
-        self._enrich_new_listings(run_id, all_listing_ids)
+        # NOTE: Enrichment via get_details() is disabled due to a pyairbnb
+        # Cookies bug on Python 3.14. Search data already provides name, price,
+        # rating, coordinates, and review count — sufficient for MVP.
+        # self._enrich_new_listings(run_id, all_listing_ids)
 
         logger.info(
             "Discovery complete: %d total listings across all zones (%d new)",
@@ -598,25 +632,39 @@ class AirbnbScraper:
                     continue
 
                 count = 0
-                for day in cal_data:
-                    day_date = day.get("date", "")
-                    if not day_date:
-                        continue
+                # Calendar returns list of month dicts, each with a "days" list
+                for month_block in cal_data:
+                    days = month_block.get("days", [])
+                    if not days:
+                        # Might be a flat list of day dicts (fallback)
+                        if "calendarDate" in month_block or "date" in month_block:
+                            days = [month_block]
+                        else:
+                            continue
 
-                    # Only keep dates within our forward window
-                    try:
-                        parsed = date.fromisoformat(day_date)
-                    except ValueError:
-                        continue
+                    for day in days:
+                        day_date = day.get("calendarDate") or day.get("date", "")
+                        if not day_date:
+                            continue
 
-                    if parsed < date.today() or parsed > cutoff:
-                        continue
+                        try:
+                            parsed = date.fromisoformat(day_date)
+                        except ValueError:
+                            continue
 
-                    is_available = bool(day.get("available", False))
-                    price = _safe_float(day.get("price"))
+                        if parsed < date.today() or parsed > cutoff:
+                            continue
 
-                    self._insert_calendar_snapshot(lid, run_id, day_date, is_available, price)
-                    count += 1
+                        is_available = bool(day.get("available", False))
+                        # Price may be nested under price.localPriceFormatted or a direct value
+                        price_data = day.get("price", {})
+                        if isinstance(price_data, dict):
+                            price = _safe_float(price_data.get("localPriceFormatted") or price_data.get("amount"))
+                        else:
+                            price = _safe_float(price_data)
+
+                        self._insert_calendar_snapshot(lid, run_id, day_date, is_available, price)
+                        count += 1
 
                 self._snapshots_added += count
 

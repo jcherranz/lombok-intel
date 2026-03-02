@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS zones (
 
 -- Bounding boxes derived from OpenStreetMap / local knowledge.
 -- Lombok spans roughly -9.1 to -8.1 lat, 115.9 to 116.8 lng.
-INSERT INTO zones (zone_id, name, description, lat_min, lat_max, lng_min, lng_max, zone_priority) VALUES
+INSERT OR IGNORE INTO zones (zone_id, name, description, lat_min, lat_max, lng_min, lng_max, zone_priority) VALUES
     ('GLI', 'Gili Islands',               'Gili Trawangan, Meno, Air — offshore northwest Lombok', -8.38,  -8.30,  116.00, 116.10, 10),
     ('SGG', 'Senggigi',                   'Senggigi beach corridor, northwest coast',               -8.55,  -8.38,  116.01, 116.10, 20),
     ('NLB', 'North Lombok / Sire',        'Sire peninsula, Gondang, north coast',                  -8.38,  -8.15,  116.10, 116.45, 30),
