@@ -1,0 +1,157 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "GLI",
+        "name": "Gili Islands",
+        "description": "Gili Trawangan, Meno, Air",
+        "fill_color": "#e74c3c"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.00, -8.30],
+          [116.10, -8.30],
+          [116.10, -8.38],
+          [116.00, -8.38],
+          [116.00, -8.30]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SGG",
+        "name": "Senggigi",
+        "description": "Senggigi beach corridor, northwest coast",
+        "fill_color": "#3498db"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.01, -8.38],
+          [116.10, -8.38],
+          [116.10, -8.55],
+          [116.01, -8.55],
+          [116.01, -8.38]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "NLB",
+        "name": "North Lombok / Sire",
+        "description": "Sire peninsula, Gondang, north coast",
+        "fill_color": "#9b59b6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.10, -8.15],
+          [116.45, -8.15],
+          [116.45, -8.38],
+          [116.10, -8.38],
+          [116.10, -8.15]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "MTR",
+        "name": "Mataram",
+        "description": "Urban capital - Mataram, Cakranegara, Ampenan",
+        "fill_color": "#95a5a6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.05, -8.50],
+          [116.20, -8.50],
+          [116.20, -8.65],
+          [116.05, -8.65],
+          [116.05, -8.50]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "KUT",
+        "name": "Kuta / Mandalika",
+        "description": "Kuta village, Mandalika SEZ, central south coast",
+        "fill_color": "#f39c12"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.23, -8.80],
+          [116.38, -8.80],
+          [116.38, -8.92],
+          [116.23, -8.92],
+          [116.23, -8.80]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "TAA",
+        "name": "Tanjung Aan / Gerupuk",
+        "description": "Tanjung Aan bay, Gerupuk surf bay",
+        "fill_color": "#e67e22"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.35, -8.82],
+          [116.52, -8.82],
+          [116.52, -8.92],
+          [116.35, -8.92],
+          [116.35, -8.82]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SBK",
+        "name": "Selong Belanak / West Surf",
+        "description": "Selong Belanak, Mawun, Mawi",
+        "fill_color": "#2ecc71"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [116.05, -8.82],
+          [116.27, -8.82],
+          [116.27, -8.95],
+          [116.05, -8.95],
+          [116.05, -8.82]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "zone_id": "SKT",
+        "name": "Sekotong",
+        "description": "Sekotong peninsula, southwest Lombok",
+        "fill_color": "#1abc9c"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [115.88, -8.60],
+          [116.08, -8.60],
+          [116.08, -8.95],
+          [115.88, -8.95],
+          [115.88, -8.60]
+        ]]
+      }
+    }
+  ]
+}

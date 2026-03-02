@@ -1,0 +1,24 @@
+# Scraping
+pyairbnb>=0.0.8
+httpx[http2]>=0.27
+curl-cffi>=0.7
+
+# Database
+# SQLite is built-in; no extra package needed
+
+# Dashboard
+streamlit>=1.40
+streamlit-folium>=0.26
+folium>=0.18
+branca>=0.8
+
+# Data processing
+pandas>=2.2
+numpy>=1.26
+
+# Visualization (charts inside Streamlit)
+plotly>=5.24
+
+# Utilities
+tenacity>=9.0
+python-dateutil>=2.9
