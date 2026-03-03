@@ -77,12 +77,14 @@ SQLite at `data/lombok_intel.db`. Key tables:
 
 Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_by_zone`, `v_supply_growth`, `v_revpar_monthly`, `v_seasonality`, `v_scrape_health`, `v_all_listings`
 
-**Warning:** `v_adr_by_zone_month` uses PERCENTILE() which doesn't exist in base SQLite. Use `v_adr_simple` instead.
+**Note:** `v_adr_by_zone_month` was removed (used non-existent PERCENTILE function). Use `v_adr_simple` instead.
 
 ## Hardening (implemented 2026-03-03)
 
 ### Automation Reliability
-- Pinned dependencies in requirements.txt (exact versions, including pytest + setuptools)
+- Pinned dependencies in requirements.txt (exact versions, including pytest + setuptools<82)
+- **setuptools capped at <82**: v82 removed `pkg_resources` which `playwright-stealth` imports
+- **Workflow commit step**: `git pull --rebase` before push prevents rejection when repo changes during run
 - SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
 - GitHub Actions: concurrency guard, snapshot validation (6-hour window matches job timeout), log artifacts, permissions block
 - API key fetch wrapped with tenacity retry (3 attempts, exponential backoff)
@@ -107,7 +109,7 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 ### Data Quality
 - validate_coordinates() and validate_price() in utils.py (warn-only, never drops data)
-- 11-sheet Excel export with try/finally on DB connection; raises on failed sheets (includes Booking listings, calendar, combined zone summary)
+- 11-sheet Excel export with try/finally on DB connection; WAL/busy_timeout PRAGMAs; raises on failed sheets (includes Booking listings, calendar, combined zone summary)
 - Dashboard RevPAR uses real occupancy from v_revpar_monthly, 60% placeholder only when empty
 - Dashboard handles missing GeoJSON gracefully, PRAGMA failures don't crash on read-only mounts
 - ADR calculator outputs p25, median, p75 percentiles + MoM growth rate
@@ -152,6 +154,9 @@ Zone assignment uses bounding boxes in `src/config.py` with priority-based overl
 
 ### Occupancy engine needs 2+ runs
 Returns 0 events until at least 2 calendar scrape runs exist to detect availability transitions. Daily cron handles this automatically.
+
+### playwright-stealth depends on deprecated pkg_resources
+`playwright-stealth` imports `pkg_resources` which was removed from `setuptools` v82. Pin: `setuptools>=75.0,<82`. When `playwright-stealth` releases a version without this dependency, the pin can be relaxed.
 
 ## pyairbnb API Reference (verified signatures)
 
