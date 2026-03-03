@@ -90,8 +90,8 @@ Zone assignment uses bounding boxes in `src/config.py` with priority-based overl
 ### pyairbnb get_details() Cookies bug
 `pyairbnb.get_details()` crashes with `'Cookies' object has no attribute 'isoformat'` on Python 3.14. The enrichment step (`_enrich_new_listings`) is disabled. Search data provides sufficient fields for MVP.
 
-### GitHub Actions workflow — local changes not pushed
-Workflow file has fixes (timeout 300min, Python 3.12, Excel export step, failure alerts) but needs a token with `workflow` scope to push. Current token only has `repo`.
+### GitHub Actions workflow — PUSHED (2026-03-03)
+Workflow file pushed successfully with full-scope token. Daily cron at 2 AM UTC. Includes Excel export step and failure notification job.
 
 ### Occupancy engine returns 0 events
 Expected behavior — needs 2+ calendar scrape runs to detect availability transitions. Second run will happen automatically via GitHub Actions daily cron (2 AM UTC).
