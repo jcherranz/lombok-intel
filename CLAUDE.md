@@ -48,8 +48,8 @@ docs/
 SQLite at `data/lombok_intel.db`. Key tables:
 - **airbnb_listings** — master listing data (1,585 listings as of 2026-03-02)
 - **booking_listings** — Booking.com listings (Playwright-based scraper, bypasses AWS WAF)
-- **calendar_snapshots** — daily availability + price per listing per date (only 5 listings scraped, prices are NULL)
-- **occupancy_events** — inferred bookings from calendar diffs (empty — needs 2+ scrape runs)
+- **calendar_snapshots** — daily availability + price per listing per date (144,781 rows, 144,326 with prices as of 2026-03-03)
+- **occupancy_events** — inferred bookings from calendar diffs (empty — needs 2+ scrape runs, Day 2 via GitHub Actions)
 - **price_history** — point-in-time price snapshots (empty)
 - **zones** — 8 Lombok investment zones (GLI, SGG, NLB, MTR, KUT, TAA, SBK, SKT)
 - **scrape_runs** — audit trail for every scrape execution
@@ -73,39 +73,28 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 Zone assignment uses bounding boxes in `src/config.py` with priority-based overlap resolution (lower number wins).
 
-## Known Bugs & Blockers (as of 2026-03-02)
+## Known Bugs & Blockers (as of 2026-03-03)
 
-### CRITICAL: Calendar prices are always NULL
-`pyairbnb.get_calendar()` returns `localPriceFormatted: null` for all days. The `v_adr_simple` and `v_forward_rates` views filter on `cs.price IS NOT NULL`, so they return 0 rows.
-**Planned fix:** Fall back to `nightly_price` from `airbnb_listings` table when calendar price is null. See execution plan.
+### FIXED: Calendar prices are always NULL
+`pyairbnb.get_calendar()` returns `localPriceFormatted: null` for all days. **FIXED:** Falls back to listing's `nightly_price` from search results. 144,326 of 144,781 snapshots now have prices.
+
+### FIXED: No resume logic in calendar scraper
+**FIXED:** Checks `calendar_snapshots` for existing data with same `run_id` before scraping each listing.
+
+### FIXED: Scrape run #1 stuck in "running"
+**FIXED:** Cleaned up with SQL update.
+
+### FIXED: .gitignore blocks database commits
+**FIXED:** Added `!data/lombok_intel.db` and `!data/lombok_intel.xlsx` exceptions.
 
 ### pyairbnb get_details() Cookies bug
 `pyairbnb.get_details()` crashes with `'Cookies' object has no attribute 'isoformat'` on Python 3.14. The enrichment step (`_enrich_new_listings`) is disabled. Search data provides sufficient fields for MVP.
 
-### Scrape run #1 stuck in "running"
-The first test run was interrupted but never finalized. Fix: `UPDATE scrape_runs SET status='partial', finished_at=datetime('now') WHERE status='running'`
+### GitHub Actions workflow — local changes not pushed
+Workflow file has fixes (timeout 300min, Python 3.12, Excel export step, failure alerts) but needs a token with `workflow` scope to push. Current token only has `repo`.
 
-### .gitignore blocks database commits
-`.gitignore` has `*.db` which prevents GitHub Actions from committing the database. Fix: add `!data/lombok_intel.db`.
-
-### GitHub Actions workflow needs fixes
-- timeout-minutes too short (45 → 300)
-- No run_type support (should use calendar_only daily, full weekly)
-- Python 3.11 → 3.12 (3.14 has pyairbnb Cookies bug)
-
-### Git push auth
-Token not embedded in remote URL. Need `gh auth setup-git` or fresh token.
-
-### No resume logic in calendar scraper
-If interrupted, re-scrapes all listings from scratch. Planned fix: skip listings that already have snapshots for current run_id.
-
-## Execution Plan
-
-Full plan at `.claude/plans/velvet-watching-pizza.md`. Summary:
-1. **Phase 0:** Fix calendar price fallback, add resume logic, clean stale run, fix .gitignore, fix workflow, push
-2. **Phase 1:** Launch calendar scrape (background, ~3-4 hrs), launch dashboard, test Booking.com
-3. **Phase 2:** Run ADR calculator + occupancy engine after scrape completes
-4. **Phase 3:** Verify end-to-end, commit data, push
+### Occupancy engine returns 0 events
+Expected behavior — needs 2+ calendar scrape runs to detect availability transitions. Second run will happen automatically via GitHub Actions daily cron (2 AM UTC).
 
 ## pyairbnb API Reference (verified signatures)
 
