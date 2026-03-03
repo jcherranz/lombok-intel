@@ -47,7 +47,7 @@ docs/
 
 SQLite at `data/lombok_intel.db`. Key tables:
 - **airbnb_listings** — master listing data (1,585 listings as of 2026-03-02)
-- **booking_listings** — Booking.com listings (empty — scraper not yet tested)
+- **booking_listings** — Booking.com listings (Playwright-based scraper, bypasses AWS WAF)
 - **calendar_snapshots** — daily availability + price per listing per date (only 5 listings scraped, prices are NULL)
 - **occupancy_events** — inferred bookings from calendar diffs (empty — needs 2+ scrape runs)
 - **price_history** — point-in-time price snapshots (empty)
@@ -132,7 +132,8 @@ Note: `localPriceFormatted` is ALWAYS null. Price data must come from search res
 
 ## Tech Stack
 - Python 3.14 (local venv at `.venv/`), target 3.12 for GitHub Actions
-- pyairbnb, httpx[http2], curl-cffi, pandas, numpy
+- pyairbnb, httpx[http2], curl-cffi, playwright, pandas, numpy
+- Playwright + headless Chromium for Booking.com (bypasses AWS WAF)
 - Streamlit + Folium + Plotly for dashboard
 - SQLite (WAL mode) for data store
 - openpyxl for Excel export

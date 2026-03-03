@@ -2,6 +2,7 @@
 pyairbnb>=0.0.8
 httpx[http2]>=0.27
 curl-cffi>=0.7
+playwright>=1.40
 
 # Database
 # SQLite is built-in; no extra package needed
