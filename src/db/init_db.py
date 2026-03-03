@@ -7,6 +7,8 @@ DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 DB_PATH = DB_DIR / "lombok_intel.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
+_migrations_applied: set[str] = set()  # Track which DB paths have been migrated this process
+
 
 def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     """Create (or open) the database and apply the schema idempotently."""
@@ -21,8 +23,33 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
 
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
+
+    # Migrations for existing databases
+    _apply_migrations(conn)
+
     conn.commit()
     return conn
+
+
+def _apply_migrations(conn: sqlite3.Connection):
+    """Apply incremental schema migrations to existing databases."""
+    # M1: occupancy_events idempotency constraint (2026-03-03)
+    # First, remove any existing duplicates so index creation succeeds
+    try:
+        conn.execute("""
+            DELETE FROM occupancy_events
+            WHERE event_id NOT IN (
+                SELECT MIN(event_id)
+                FROM occupancy_events
+                GROUP BY source, listing_id, event_date, prev_run_id, curr_run_id
+            )
+        """)
+    except Exception:
+        pass  # Table may not exist yet or be empty
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uix_occupancy_events_dedup
+        ON occupancy_events (source, listing_id, event_date, prev_run_id, curr_run_id)
+    """)
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
@@ -36,6 +63,11 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.row_factory = sqlite3.Row
+    db_key = str(db_path)
+    if db_key not in _migrations_applied:
+        _apply_migrations(conn)
+        conn.commit()
+        _migrations_applied.add(db_key)
     return conn
 
 

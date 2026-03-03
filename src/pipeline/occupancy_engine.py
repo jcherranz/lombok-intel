@@ -300,7 +300,7 @@ class OccupancyEngine:
             if events:
                 conn.executemany(
                     """
-                    INSERT INTO occupancy_events
+                    INSERT OR IGNORE INTO occupancy_events
                         (source, listing_id, zone_id, event_date, detected_at,
                          prev_run_id, curr_run_id, transition, event_type,
                          last_known_price, currency)
@@ -452,7 +452,7 @@ class OccupancyEngine:
             if events:
                 conn.executemany(
                     """
-                    INSERT INTO occupancy_events
+                    INSERT OR IGNORE INTO occupancy_events
                         (source, listing_id, zone_id, event_date, detected_at,
                          prev_run_id, curr_run_id, transition, event_type,
                          last_known_price, currency)

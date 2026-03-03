@@ -35,6 +35,9 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
+      - name: Run tests
+        run: pytest tests/ -x -q
+
       - name: Initialize database (if needed)
         run: python -m src.db.init_db
 
@@ -49,15 +52,15 @@ jobs:
           python -c "
           import sqlite3
           conn = sqlite3.connect('data/lombok_intel.db')
-          # Check the most recent run added snapshots
           row = conn.execute(
               \"SELECT run_id, snapshots_added FROM scrape_runs ORDER BY run_id DESC LIMIT 1\"
           ).fetchone()
           if row is None:
               raise SystemExit('FAIL: no scrape runs found')
-          run_id, snapshots = row
+          run_id = row[0]
+          snapshots = row[1] if row[1] is not None else 0
           print(f'Latest run #{run_id}: {snapshots} snapshots added')
-          if not snapshots or snapshots == 0:
+          if snapshots == 0:
               raise SystemExit(f'FAIL: run #{run_id} added zero snapshots')
           "
 
@@ -67,11 +70,9 @@ jobs:
 
       - name: Run ADR calculator
         run: python -m src.pipeline.adr_calculator
-        continue-on-error: true
 
       - name: Export Excel snapshot
         run: python -m src.export_excel
-        continue-on-error: true
 
       - name: Archive old snapshots (180+ days)
         run: python -m src.db.archive
@@ -87,6 +88,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload DB backup (private artifact)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: db-backup-${{ github.run_id }}
@@ -147,10 +149,10 @@ jobs:
             conn = sqlite3.connect('data/lombok_intel.db')
             airbnb = conn.execute('SELECT COUNT(*) FROM airbnb_listings WHERE is_active=1').fetchone()[0]
             booking = conn.execute('SELECT COUNT(*) FROM booking_listings WHERE is_active=1').fetchone()[0]
-            runs = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE started_at >= date(\"now\", \"-7 days\")').fetchone()[0]
-            errors = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE status=\"failed\" AND started_at >= date(\"now\", \"-7 days\")').fetchone()[0]
+            runs = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE started_at >= date(\\\"now\\\", \\\"-7 days\\\")').fetchone()[0]
+            errors = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE status=\\\"failed\\\" AND started_at >= date(\\\"now\\\", \\\"-7 days\\\")').fetchone()[0]
             adr_rows = conn.execute('SELECT zone_id, adr FROM v_adr_simple ORDER BY zone_id').fetchall()
-            adr_summary = '\\n'.join([f'  - {r[0]}: \\${r[1]:.0f}' for r in adr_rows]) if adr_rows else '  No ADR data yet'
+            adr_summary = '\\n'.join(['  - ' + str(r[0]) + ': $' + str(int(r[1])) for r in adr_rows]) if adr_rows else '  No ADR data yet'
             print(json.dumps({'airbnb': airbnb, 'booking': booking, 'runs': runs, 'errors': errors, 'adr': adr_summary}))
             "`).toString().trim();
             const data = JSON.parse(summary);

@@ -112,7 +112,25 @@ class ADRCalculator:
                 start_date, end_date, "cs.snapshot_date"
             )
 
+            # Deduplicate: keep only the latest run's snapshot per
+            # (source, listing_id, snapshot_date) to avoid double-counting
+            # when multiple scrape runs cover the same dates.
+            # ROW_NUMBER runs on ALL snapshots (not pre-filtered) so the
+            # latest run always wins regardless of availability state.
+            dedup_cte = f"""
+                WITH deduped AS (
+                    SELECT cs.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY cs.source, cs.listing_id, cs.snapshot_date
+                               ORDER BY cs.run_id DESC
+                           ) AS rn
+                    FROM calendar_snapshots cs
+                    WHERE {date_clause}
+                )
+            """
+
             sql = f"""
+                {dedup_cte}
                 SELECT
                     COALESCE(al.zone_id, bl.zone_id) AS zone_id,
                     strftime('%Y-%m', cs.snapshot_date) AS year_month,
@@ -120,15 +138,15 @@ class ADRCalculator:
                     MIN(cs.price)   AS min_price,
                     MAX(cs.price)   AS max_price,
                     COUNT(*)        AS sample_size
-                FROM calendar_snapshots cs
+                FROM deduped cs
                 LEFT JOIN airbnb_listings  al
                     ON cs.source = 'airbnb' AND cs.listing_id = al.listing_id
                 LEFT JOIN booking_listings bl
                     ON cs.source = 'booking' AND cs.listing_id = bl.property_id
-                WHERE cs.is_available = 1
+                WHERE cs.rn = 1
+                  AND cs.is_available = 1
                   AND cs.price IS NOT NULL
                   AND {zone_clause}
-                  AND {date_clause}
                 GROUP BY COALESCE(al.zone_id, bl.zone_id),
                          strftime('%Y-%m', cs.snapshot_date)
                 ORDER BY zone_id, year_month
@@ -136,22 +154,23 @@ class ADRCalculator:
             params = self._build_params(zone_id, start_date, end_date)
             df = pd.read_sql_query(sql, conn, params=params)
 
-            # Add percentile columns from raw price data
+            # Add percentile columns from raw price data (also deduped)
             if not df.empty:
                 pct_sql = f"""
+                    {dedup_cte}
                     SELECT
                         COALESCE(al.zone_id, bl.zone_id) AS zone_id,
                         strftime('%Y-%m', cs.snapshot_date) AS year_month,
                         cs.price
-                    FROM calendar_snapshots cs
+                    FROM deduped cs
                     LEFT JOIN airbnb_listings  al
                         ON cs.source = 'airbnb' AND cs.listing_id = al.listing_id
                     LEFT JOIN booking_listings bl
                         ON cs.source = 'booking' AND cs.listing_id = bl.property_id
-                    WHERE cs.is_available = 1
+                    WHERE cs.rn = 1
+                      AND cs.is_available = 1
                       AND cs.price IS NOT NULL
                       AND {zone_clause}
-                      AND {date_clause}
                 """
                 df_raw = pd.read_sql_query(pct_sql, conn, params=params)
                 if not df_raw.empty:
@@ -240,7 +259,7 @@ class ADRCalculator:
                 SELECT
                     COALESCE(al.zone_id, bl.zone_id) AS zone_id,
                     strftime('%Y-%m', cs.snapshot_date) AS year_month,
-                    COUNT(DISTINCT cs.listing_id || '|' || cs.snapshot_date)
+                    COUNT(DISTINCT cs.source || '|' || cs.listing_id || '|' || cs.snapshot_date)
                         AS total_nights
                 FROM calendar_snapshots cs
                 LEFT JOIN airbnb_listings  al

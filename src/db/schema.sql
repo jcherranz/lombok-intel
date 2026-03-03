@@ -247,6 +247,11 @@ CREATE TABLE IF NOT EXISTS occupancy_events (
     currency            TEXT
 );
 
+-- Idempotency: prevent duplicate events from re-running on same run pair
+-- (applied via _apply_migrations for existing DBs)
+CREATE UNIQUE INDEX IF NOT EXISTS uix_occupancy_events_dedup
+    ON occupancy_events (source, listing_id, event_date, prev_run_id, curr_run_id);
+
 
 -- =============================================================================
 -- PRICE HISTORY (point-in-time listing-level pricing)

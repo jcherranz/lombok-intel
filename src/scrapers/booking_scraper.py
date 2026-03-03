@@ -126,14 +126,26 @@ class BookingScraper:
         self._page.route("**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2,ttf,eot}",
                          lambda route: route.abort())
     def _stop_browser(self):
-        if self._page and not self._page.is_closed():
-            self._page.close()
-        if self._context:
-            self._context.close()
-        if self._browser:
-            self._browser.close()
-        if self._playwright:
-            self._playwright.stop()
+        try:
+            if self._page and not self._page.is_closed():
+                self._page.close()
+        except Exception:
+            pass
+        try:
+            if self._context:
+                self._context.close()
+        except Exception:
+            pass
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                self._playwright.stop()
+        except Exception:
+            pass
         self._page = None
         self._context = None
         self._browser = None
@@ -144,10 +156,16 @@ class BookingScraper:
     def _rotate_context(self):
         """Close current context and open a fresh one to prevent memory leaks."""
         from playwright_stealth import stealth_sync
-        if self._page and not self._page.is_closed():
-            self._page.close()
-        if self._context:
-            self._context.close()
+        try:
+            if self._page and not self._page.is_closed():
+                self._page.close()
+        except Exception:
+            pass
+        try:
+            if self._context:
+                self._context.close()
+        except Exception:
+            pass
         self._context = self._browser.new_context(
             user_agent=self._pick_ua(),
             locale="en-US",
@@ -393,6 +411,7 @@ class BookingScraper:
             checkout = (today + timedelta(days=day_offset + 1)).isoformat()
             logger.info("Availability scan %d/%d: %s", day_offset + 1, days_forward, checkin)
             day_available: dict[str, tuple[float | None, int | None]] = {}
+            failed_zone_ids: set[str] = set()
             remaining_unassigned = set(unassigned)
             for zone_id in ZONE_BOUNDS:
                 target_ids = set(zone_targets.get(zone_id, set())) | remaining_unassigned
@@ -404,7 +423,21 @@ class BookingScraper:
                     remaining_unassigned.difference_update(zone_found.keys())
                 except Exception as exc:
                     logger.warning("Availability scan failed for zone %s on %s: %s", zone_id, checkin, exc)
+                    failed_zone_ids.add(zone_id)
+            # Build set of property IDs in failed zones — skip writing
+            # snapshots for them since we don't know their actual state.
+            # Also skip unassigned properties if any zone failed (they get
+            # scanned across all zones).
+            skip_ids = set()
+            if failed_zone_ids:
+                for zid in failed_zone_ids:
+                    skip_ids.update(zone_targets.get(zid, set()))
+                if remaining_unassigned:
+                    skip_ids.update(unassigned)
+                logger.warning("Skipping %d properties in failed zones: %s", len(skip_ids), failed_zone_ids)
             for property_id in property_ids:
+                if property_id in skip_ids:
+                    continue
                 hit = day_available.get(property_id)
                 snapshots.append(
                     AvailabilitySnapshot(
@@ -553,4 +586,8 @@ class BookingScraper:
         logger.info("=" * 60)
         return summary
 if __name__ == "__main__":
-    BookingScraper().run()
+    import sys
+    summary = BookingScraper().run()
+    if summary.get("status") == "failed":
+        print(f"Booking scraper FAILED: {summary.get('error_message', 'unknown')}")
+        sys.exit(1)

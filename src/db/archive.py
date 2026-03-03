@@ -14,6 +14,7 @@ from src.utils import setup_logger
 logger = setup_logger("archive")
 
 DEFAULT_RETENTION_DAYS = 180
+CHUNK_SIZE = 1000
 
 
 def archive_old_snapshots(
@@ -22,6 +23,7 @@ def archive_old_snapshots(
 ) -> int:
     """Move calendar_snapshots older than retention_days to archive DB.
 
+    Processes in chunks of CHUNK_SIZE to avoid memory pressure on large tables.
     Returns the number of rows archived.
     """
     db_path = db_path or DB_PATH
@@ -46,6 +48,7 @@ def archive_old_snapshots(
         archive_dir.mkdir(parents=True, exist_ok=True)
         archive_db = archive_dir / f"snapshots_before_{cutoff}.db"
         archive_conn = sqlite3.connect(str(archive_db))
+        archive_conn.execute("PRAGMA busy_timeout = 30000")
 
         # Create archive table with same schema
         archive_conn.execute("""
@@ -63,13 +66,17 @@ def archive_old_snapshots(
             )
         """)
 
-        # Copy rows to archive
-        rows = conn.execute(
-            "SELECT * FROM calendar_snapshots WHERE snapshot_date < ?",
-            (cutoff,),
-        ).fetchall()
+        # Process in chunks to limit memory usage
+        total_archived = 0
+        while True:
+            rows = conn.execute(
+                "SELECT * FROM calendar_snapshots WHERE snapshot_date < ? LIMIT ?",
+                (cutoff, CHUNK_SIZE),
+            ).fetchall()
 
-        if rows:
+            if not rows:
+                break
+
             placeholders = ",".join("?" * len(rows[0]))
             archive_conn.executemany(
                 f"INSERT OR IGNORE INTO calendar_snapshots VALUES ({placeholders})",
@@ -77,18 +84,22 @@ def archive_old_snapshots(
             )
             archive_conn.commit()
 
-            # Delete from main DB
+            # Delete the chunk from main DB by snapshot_id
+            ids = [row[0] for row in rows]  # snapshot_id is first column
             conn.execute(
-                "DELETE FROM calendar_snapshots WHERE snapshot_date < ?",
-                (cutoff,),
+                f"DELETE FROM calendar_snapshots WHERE snapshot_id IN ({','.join('?' * len(ids))})",
+                ids,
             )
             conn.commit()
 
+            total_archived += len(rows)
+            logger.info("  Archived chunk: %d rows (%d total)", len(rows), total_archived)
+
         archive_conn.close()
         logger.info(
-            "Archived %d snapshots to %s", count, archive_db.name
+            "Archived %d snapshots to %s", total_archived, archive_db.name
         )
-        return count
+        return total_archived
 
     finally:
         conn.close()

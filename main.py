@@ -18,9 +18,10 @@ from src.utils import setup_logger
 logger = setup_logger("main")
 
 
-def run_scrapers():
-    """Run both scrapers sequentially."""
+def run_scrapers() -> bool:
+    """Run both scrapers sequentially. Returns True if at least one succeeded."""
     logger.info("=== Starting data collection ===")
+    any_success = False
 
     try:
         logger.info("Running Airbnb scraper...")
@@ -28,6 +29,7 @@ def run_scrapers():
         airbnb = AirbnbScraper()
         airbnb.run()
         logger.info("Airbnb scraper completed.")
+        any_success = True
     except Exception as e:
         logger.error(f"Airbnb scraper failed: {e}")
 
@@ -35,10 +37,18 @@ def run_scrapers():
         logger.info("Running Booking.com scraper...")
         from src.scrapers.booking_scraper import BookingScraper
         booking = BookingScraper()
-        booking.run()
-        logger.info("Booking.com scraper completed.")
+        result = booking.run()
+        if result.get("status") == "failed":
+            logger.error(f"Booking.com scraper failed: {result.get('error_message')}")
+        else:
+            logger.info("Booking.com scraper completed.")
+            any_success = True
     except Exception as e:
         logger.error(f"Booking.com scraper failed: {e}")
+
+    if not any_success:
+        logger.error("ALL scrapers failed — aborting pipeline.")
+    return any_success
 
 
 def run_analysis():
@@ -86,14 +96,20 @@ def main():
         launch_dashboard()
         return
 
+    has_errors = False
+
     if args.scrape:
-        run_scrapers()
+        if not run_scrapers():
+            has_errors = True
     elif args.analyze:
         run_analysis()
     else:
-        # Full pipeline
-        run_scrapers()
-        run_analysis()
+        # Full pipeline — skip analysis if all scrapers failed
+        if not run_scrapers():
+            has_errors = True
+            logger.warning("Skipping analysis — no successful scrape.")
+        else:
+            run_analysis()
 
     # Export Excel snapshot
     try:
@@ -103,7 +119,11 @@ def main():
     except Exception as e:
         logger.error(f"Excel export failed: {e}")
 
-    logger.info("=== Pipeline complete ===")
+    if has_errors:
+        logger.error("=== Pipeline finished with errors ===")
+        sys.exit(1)
+    else:
+        logger.info("=== Pipeline complete ===")
 
 
 if __name__ == "__main__":
