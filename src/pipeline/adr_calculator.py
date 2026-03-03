@@ -16,6 +16,7 @@ import sqlite3
 from datetime import date, datetime
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from src.config import DB_PATH, CALENDAR_DAYS_FORWARD
@@ -134,6 +135,38 @@ class ADRCalculator:
             """
             params = self._build_params(zone_id, start_date, end_date)
             df = pd.read_sql_query(sql, conn, params=params)
+
+            # Add percentile columns from raw price data
+            if not df.empty:
+                pct_sql = f"""
+                    SELECT
+                        COALESCE(al.zone_id, bl.zone_id) AS zone_id,
+                        strftime('%Y-%m', cs.snapshot_date) AS year_month,
+                        cs.price
+                    FROM calendar_snapshots cs
+                    LEFT JOIN airbnb_listings  al
+                        ON cs.source = 'airbnb' AND cs.listing_id = al.listing_id
+                    LEFT JOIN booking_listings bl
+                        ON cs.source = 'booking' AND cs.listing_id = bl.property_id
+                    WHERE cs.is_available = 1
+                      AND cs.price IS NOT NULL
+                      AND {zone_clause}
+                      AND {date_clause}
+                """
+                df_raw = pd.read_sql_query(pct_sql, conn, params=params)
+                if not df_raw.empty:
+                    pcts = (
+                        df_raw.groupby(["zone_id", "year_month"])["price"]
+                        .quantile([0.25, 0.5, 0.75])
+                        .unstack()
+                        .reset_index()
+                    )
+                    pcts.columns = ["zone_id", "year_month", "p25", "median", "p75"]
+                    df = df.merge(pcts, on=["zone_id", "year_month"], how="left")
+
+                # MoM growth rate
+                df = df.sort_values(["zone_id", "year_month"])
+                df["adr_mom_pct"] = df.groupby("zone_id")["adr"].pct_change() * 100
 
             logger.info(
                 "compute_zone_adr: %d rows (zone=%s, %s to %s)",

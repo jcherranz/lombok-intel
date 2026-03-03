@@ -16,6 +16,8 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
 
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
@@ -28,9 +30,11 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     db_path = db_path or DB_PATH
     if not db_path.exists():
         return init_database(db_path)
-    conn = sqlite3.connect(str(db_path), timeout=60)
+    conn = sqlite3.connect(str(db_path), timeout=30)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.row_factory = sqlite3.Row
     return conn
 

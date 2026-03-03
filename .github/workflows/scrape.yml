@@ -6,6 +6,10 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch: {}  # Allow manual trigger
 
+concurrency:
+  group: scrape-pipeline
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -32,11 +36,26 @@ jobs:
 
       - name: Run Airbnb scraper
         run: python -m src.scrapers.airbnb_scraper
-        continue-on-error: true
 
       - name: Run Booking.com scraper
         run: python -m src.scrapers.booking_scraper
-        continue-on-error: true
+
+      - name: Validate scrape results
+        run: |
+          python -c "
+          import sqlite3
+          conn = sqlite3.connect('data/lombok_intel.db')
+          # Check the most recent run added snapshots
+          row = conn.execute(
+              \"SELECT run_id, snapshots_added FROM scrape_runs ORDER BY run_id DESC LIMIT 1\"
+          ).fetchone()
+          if row is None:
+              raise SystemExit('FAIL: no scrape runs found')
+          run_id, snapshots = row
+          print(f'Latest run #{run_id}: {snapshots} snapshots added')
+          if not snapshots or snapshots == 0:
+              raise SystemExit(f'FAIL: run #{run_id} added zero snapshots')
+          "
 
       - name: Run occupancy inference
         run: python -m src.pipeline.occupancy_engine
@@ -50,6 +69,47 @@ jobs:
         run: python -m src.export_excel
         continue-on-error: true
 
+      - name: Archive old snapshots (180+ days)
+        run: python -m src.db.archive
+        continue-on-error: true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-logs-${{ github.run_id }}
+          path: data/logs/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Create DB backup release
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          TAG="backup-${DATE}"
+          gzip -c data/lombok_intel.db > data/lombok_intel_${DATE}.db.gz
+          # Delete existing release for today (idempotent re-runs)
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" \
+            data/lombok_intel_${DATE}.db.gz \
+            --title "DB Backup ${DATE}" \
+            --notes "Automated daily database backup" \
+            --latest=false
+          rm data/lombok_intel_${DATE}.db.gz
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prune old backup releases (keep 30)
+        run: |
+          gh release list --limit 100 --json tagName,createdAt \
+            -q '[.[] | select(.tagName | startswith("backup-"))] | sort_by(.createdAt) | reverse | .[30:] | .[].tagName' \
+          | while read -r tag; do
+              echo "Deleting old backup: $tag"
+              gh release delete "$tag" --yes --cleanup-tag
+            done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
       - name: Commit updated data
         run: |
           git config user.name "Lombok Intel Bot"
@@ -57,6 +117,68 @@ jobs:
           git add data/lombok_intel.db data/lombok_intel.xlsx
           git diff --staged --quiet || git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
           git push
+
+      - name: Send Telegram notification (success)
+        if: success()
+        run: |
+          python -c "
+          from src.utils import notify_telegram
+          import sqlite3
+          conn = sqlite3.connect('data/lombok_intel.db')
+          row = conn.execute('SELECT run_id, listings_seen, snapshots_added, status FROM scrape_runs ORDER BY run_id DESC LIMIT 1').fetchone()
+          airbnb = conn.execute('SELECT COUNT(*) FROM airbnb_listings WHERE is_active=1').fetchone()[0]
+          booking = conn.execute('SELECT COUNT(*) FROM booking_listings WHERE is_active=1').fetchone()[0]
+          msg = f'*Lombok Intel - Daily Scrape OK*\n'
+          msg += f'Run #{row[0]}: {row[1]} listings, {row[2]} snapshots\n'
+          msg += f'Active: {airbnb} Airbnb + {booking} Booking\n'
+          msg += f'Status: {row[3]}'
+          notify_telegram(msg)
+          "
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        continue-on-error: true
+
+      - name: Send Telegram notification (failure)
+        if: failure()
+        run: |
+          python -c "
+          from src.utils import notify_telegram
+          notify_telegram('*Lombok Intel - Daily Scrape FAILED*\nCheck: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}')
+          "
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        continue-on-error: true
+
+      - name: Weekly summary issue (Mondays only)
+        if: success() && github.event.schedule == '0 2 * * *'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const day = new Date().getUTCDay();
+            if (day !== 1) return; // Monday = 1
+            const { execSync } = require('child_process');
+            const summary = execSync(`python -c "
+            import sqlite3, json
+            conn = sqlite3.connect('data/lombok_intel.db')
+            airbnb = conn.execute('SELECT COUNT(*) FROM airbnb_listings WHERE is_active=1').fetchone()[0]
+            booking = conn.execute('SELECT COUNT(*) FROM booking_listings WHERE is_active=1').fetchone()[0]
+            runs = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE started_at >= date(\"now\", \"-7 days\")').fetchone()[0]
+            errors = conn.execute('SELECT COUNT(*) FROM scrape_runs WHERE status=\"failed\" AND started_at >= date(\"now\", \"-7 days\")').fetchone()[0]
+            adr_rows = conn.execute('SELECT zone_id, adr FROM v_adr_simple ORDER BY zone_id').fetchall()
+            adr_summary = '\\n'.join([f'  - {r[0]}: \\${r[1]:.0f}' for r in adr_rows]) if adr_rows else '  No ADR data yet'
+            print(json.dumps({'airbnb': airbnb, 'booking': booking, 'runs': runs, 'errors': errors, 'adr': adr_summary}))
+            "`).toString().trim();
+            const data = JSON.parse(summary);
+            const date = new Date().toISOString().slice(0, 10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Weekly Summary — ${date}`,
+              body: `## Lombok Intel Weekly Report\n\n**Active Listings:** ${data.airbnb} Airbnb + ${data.booking} Booking.com\n**Scrape Runs (7d):** ${data.runs} total, ${data.errors} failed\n\n**ADR by Zone:**\n${data.adr}\n\n---\n_Auto-generated by GitHub Actions_`,
+              labels: ['report', 'automated']
+            });
 
   notify-failure:
     runs-on: ubuntu-latest

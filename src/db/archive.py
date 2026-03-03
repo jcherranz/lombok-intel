@@ -1,0 +1,110 @@
+"""Archive old calendar_snapshots to keep the main database lean.
+
+Moves snapshots older than a configurable number of days (default: 180)
+to a separate SQLite archive database in data/archive/.
+"""
+
+import sqlite3
+from datetime import date, timedelta
+from pathlib import Path
+
+from src.db.init_db import DB_PATH, get_connection
+from src.utils import setup_logger
+
+logger = setup_logger("archive")
+
+DEFAULT_RETENTION_DAYS = 180
+
+
+def archive_old_snapshots(
+    db_path: Path | None = None,
+    retention_days: int = DEFAULT_RETENTION_DAYS,
+) -> int:
+    """Move calendar_snapshots older than retention_days to archive DB.
+
+    Returns the number of rows archived.
+    """
+    db_path = db_path or DB_PATH
+    archive_dir = db_path.parent / "archive"
+    cutoff = (date.today() - timedelta(days=retention_days)).isoformat()
+
+    conn = get_connection(db_path)
+    try:
+        # Count rows to archive
+        count = conn.execute(
+            "SELECT COUNT(*) FROM calendar_snapshots WHERE snapshot_date < ?",
+            (cutoff,),
+        ).fetchone()[0]
+
+        if count == 0:
+            logger.info("No snapshots older than %s to archive.", cutoff)
+            return 0
+
+        logger.info("Archiving %d snapshots older than %s...", count, cutoff)
+
+        # Create archive directory and DB
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archive_db = archive_dir / f"snapshots_before_{cutoff}.db"
+        archive_conn = sqlite3.connect(str(archive_db))
+
+        # Create archive table with same schema
+        archive_conn.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_snapshots (
+                snapshot_id INTEGER PRIMARY KEY,
+                source TEXT NOT NULL,
+                listing_id TEXT NOT NULL,
+                run_id INTEGER,
+                snapshot_date TEXT NOT NULL,
+                scraped_at TEXT,
+                is_available INTEGER DEFAULT 1,
+                price REAL,
+                currency TEXT DEFAULT 'USD',
+                available_rooms INTEGER
+            )
+        """)
+
+        # Copy rows to archive
+        rows = conn.execute(
+            "SELECT * FROM calendar_snapshots WHERE snapshot_date < ?",
+            (cutoff,),
+        ).fetchall()
+
+        if rows:
+            placeholders = ",".join("?" * len(rows[0]))
+            archive_conn.executemany(
+                f"INSERT OR IGNORE INTO calendar_snapshots VALUES ({placeholders})",
+                rows,
+            )
+            archive_conn.commit()
+
+            # Delete from main DB
+            conn.execute(
+                "DELETE FROM calendar_snapshots WHERE snapshot_date < ?",
+                (cutoff,),
+            )
+            conn.commit()
+
+        archive_conn.close()
+        logger.info(
+            "Archived %d snapshots to %s", count, archive_db.name
+        )
+        return count
+
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Archive old calendar snapshots")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_RETENTION_DAYS,
+        help=f"Retain snapshots newer than N days (default: {DEFAULT_RETENTION_DAYS})",
+    )
+    args = parser.parse_args()
+
+    archived = archive_old_snapshots(retention_days=args.days)
+    print(f"Archived {archived} snapshots.")

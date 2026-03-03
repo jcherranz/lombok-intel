@@ -1,0 +1,5 @@
+# Mark binary files to prevent git diff noise
+*.db binary
+*.xlsx binary
+*.db-wal binary
+*.db-shm binary

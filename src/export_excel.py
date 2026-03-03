@@ -28,6 +28,14 @@ def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
             WHERE is_active = 1
             ORDER BY zone_id, nightly_price DESC
         """,
+        "Booking Listings": """
+            SELECT property_id, name, property_type, zone_id, latitude, longitude,
+                   star_rating, review_score, review_count,
+                   first_scraped_at, last_scraped_at
+            FROM booking_listings
+            WHERE is_active = 1
+            ORDER BY zone_id, review_score DESC
+        """,
         "Zone Summary": """
             SELECT z.zone_id, z.name AS zone_name,
                    COUNT(*) AS listings,
@@ -42,6 +50,23 @@ def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
             GROUP BY z.zone_id
             ORDER BY listings DESC
         """,
+        "Combined Zone Summary": """
+            SELECT z.zone_id, z.name AS zone_name,
+                   SUM(CASE WHEN source = 'airbnb' THEN 1 ELSE 0 END) AS airbnb_listings,
+                   SUM(CASE WHEN source = 'booking' THEN 1 ELSE 0 END) AS booking_listings,
+                   COUNT(*) AS total_listings,
+                   ROUND(AVG(nightly_price), 1) AS avg_price
+            FROM (
+                SELECT zone_id, 'airbnb' AS source, nightly_price
+                FROM airbnb_listings WHERE is_active = 1
+                UNION ALL
+                SELECT zone_id, 'booking' AS source, NULL AS nightly_price
+                FROM booking_listings WHERE is_active = 1
+            ) combined
+            JOIN zones z ON combined.zone_id = z.zone_id
+            GROUP BY z.zone_id
+            ORDER BY total_listings DESC
+        """,
         "Calendar": """
             SELECT cs.listing_id, a.name, a.zone_id, cs.snapshot_date,
                    cs.is_available, cs.price, a.nightly_price AS base_price
@@ -49,6 +74,14 @@ def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
             JOIN airbnb_listings a ON cs.listing_id = a.listing_id
             WHERE cs.source = 'airbnb'
             ORDER BY a.zone_id, cs.listing_id, cs.snapshot_date
+        """,
+        "Booking Calendar": """
+            SELECT cs.listing_id AS property_id, b.name, b.zone_id,
+                   cs.snapshot_date, cs.is_available, cs.price
+            FROM calendar_snapshots cs
+            JOIN booking_listings b ON cs.listing_id = b.property_id
+            WHERE cs.source = 'booking'
+            ORDER BY b.zone_id, cs.listing_id, cs.snapshot_date
         """,
         "ADR by Zone": """
             SELECT * FROM v_adr_simple

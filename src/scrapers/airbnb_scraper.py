@@ -27,7 +27,7 @@ from src.config import (
     ZONES,
 )
 from src.db.init_db import get_connection
-from src.utils import assign_zone, now_iso, rate_limit, setup_logger
+from src.utils import assign_zone, now_iso, rate_limit, setup_logger, validate_coordinates, validate_price
 
 logger = setup_logger("airbnb_scraper")
 
@@ -113,11 +113,22 @@ class AirbnbScraper:
         self._snapshots_added = 0
         self._errors: list[str] = []
 
+    @retry(
+        stop=stop_after_attempt(MAX_RETRIES),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type(Exception),
+        before_sleep=before_sleep_log(logger, 20),
+        reraise=True,
+    )
+    def _fetch_api_key(self) -> str:
+        """Fetch the Airbnb API key with retry logic."""
+        return pyairbnb.get_api_key(proxy_url=self.proxy_url)
+
     def _get_api_key(self) -> str:
         """Fetch and cache the Airbnb API key needed for calendar/details calls."""
         if self._api_key is None:
             logger.info("Fetching Airbnb API key...")
-            self._api_key = pyairbnb.get_api_key(proxy_url=self.proxy_url)
+            self._api_key = self._fetch_api_key()
             logger.info("API key obtained.")
         return self._api_key
 
@@ -175,6 +186,13 @@ class AirbnbScraper:
             run_id, status, self._listings_seen, self._listings_new, self._snapshots_added,
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=16),
+        retry=retry_if_exception_type(sqlite3.OperationalError),
+        before_sleep=before_sleep_log(logger, 20),
+        reraise=True,
+    )
     def _upsert_listing(self, data: dict[str, Any], run_id: int) -> bool:
         """Upsert a single listing into airbnb_listings.
 
@@ -190,7 +208,15 @@ class AirbnbScraper:
         lat = _safe_float(coords.get("latitude") or data.get("lat") or data.get("latitude"))
         # Note: pyairbnb has a typo — "longitud" instead of "longitude"
         lng = _safe_float(coords.get("longitud") or coords.get("longitude") or data.get("lng") or data.get("longitude"))
+        validate_coordinates(lat, lng)
         zone_id = assign_zone(lat, lng)
+
+        # Validate price
+        nightly_price = _safe_float(
+            data.get("nightly_price")
+            or (data.get("price", {}).get("unit", {}).get("amount") if isinstance(data.get("price"), dict) else data.get("price"))
+        )
+        validate_price(nightly_price)
 
         now = now_iso()
 
@@ -336,6 +362,13 @@ class AirbnbScraper:
             [(listing_id, a.strip()) for a in amenities if a and a.strip()],
         )
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=16),
+        retry=retry_if_exception_type(sqlite3.OperationalError),
+        before_sleep=before_sleep_log(logger, 20),
+        reraise=True,
+    )
     def _insert_calendar_snapshot(
         self,
         listing_id: str,

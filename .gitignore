@@ -8,3 +8,15 @@ __pycache__/
 .DS_Store
 .venv/
 venv/
+
+# Logs
+data/logs/
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+
+# IDE
+.idea/
+.vscode/

@@ -18,14 +18,33 @@ from playwright.sync_api import (
     TimeoutError as PlaywrightTimeoutError,
     sync_playwright,
 )
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 from src.config import BOOKING_CURRENCY, BOOKING_LANGUAGE, CALENDAR_DAYS_FORWARD, ZONE_BOUNDS, ZONES
 from src.db.init_db import DB_PATH, get_connection
-from src.utils import assign_zone, now_iso, rate_limit, setup_logger
+from src.utils import assign_zone, now_iso, rate_limit, setup_logger, validate_coordinates, validate_price
 SEARCH_URL_BASE = "https://www.booking.com/searchresults.html"
-BOOKING_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
+_USER_AGENTS = [
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", 3),
+    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", 2),
+    ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", 2),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) "
+     "Gecko/20100101 Firefox/133.0", 1),
+    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15", 1),
+    ("Mozilla/5.0 (X11; Linux x86_64; rv:133.0) "
+     "Gecko/20100101 Firefox/133.0", 1),
+]
+_UA_POOL = [ua for ua, weight in _USER_AGENTS for _ in range(weight)]
+CONTEXT_ROTATION_INTERVAL = 50  # rotate browser context every N page loads
 PAGE_TIMEOUT_MS = 60_000
 WAF_SETTLE_MS = 5_000
 RESULTS_PER_PAGE = 25
@@ -87,15 +106,25 @@ class BookingScraper:
         self._listings_seen = 0
         self._listings_new = 0
         self._snapshots_added = 0
+        self._page_load_count = 0
+
+    def _pick_ua(self) -> str:
+        return random.choice(_UA_POOL)
+
     def _start_browser(self):
+        from playwright_stealth import stealth_sync
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context(
-            user_agent=BOOKING_USER_AGENT,
+            user_agent=self._pick_ua(),
             locale="en-US",
             viewport={"width": 1920, "height": 1080},
         )
         self._page = self._context.new_page()
+        stealth_sync(self._page)
+        # Block images, CSS, fonts to reduce memory footprint
+        self._page.route("**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2,ttf,eot}",
+                         lambda route: route.abort())
     def _stop_browser(self):
         if self._page and not self._page.is_closed():
             self._page.close()
@@ -112,7 +141,35 @@ class BookingScraper:
     def _booking_delay(self):
         rate_limit()
         time.sleep(random.uniform(1.0, 2.0))
+    def _rotate_context(self):
+        """Close current context and open a fresh one to prevent memory leaks."""
+        from playwright_stealth import stealth_sync
+        if self._page and not self._page.is_closed():
+            self._page.close()
+        if self._context:
+            self._context.close()
+        self._context = self._browser.new_context(
+            user_agent=self._pick_ua(),
+            locale="en-US",
+            viewport={"width": 1920, "height": 1080},
+        )
+        self._page = self._context.new_page()
+        stealth_sync(self._page)
+        self._page.route("**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2,ttf,eot}",
+                         lambda route: route.abort())
+        logger.info("Browser context rotated (after %d page loads)", self._page_load_count)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        retry=retry_if_exception_type((PlaywrightTimeoutError, RuntimeError)),
+        before_sleep=before_sleep_log(logger, 20),
+        reraise=True,
+    )
     def _load_page_html(self, url: str, waf_wait_ms: int = WAF_SETTLE_MS) -> str:
+        # Rotate context every N page loads to prevent memory leaks
+        if self._page_load_count > 0 and self._page_load_count % CONTEXT_ROTATION_INTERVAL == 0:
+            self._rotate_context()
         if not self._page or self._page.is_closed():
             if not self._context:
                 raise RuntimeError("Playwright context is not initialized")
@@ -121,6 +178,7 @@ class BookingScraper:
         try:
             self._page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
             self._page.wait_for_timeout(waf_wait_ms)
+            self._page_load_count += 1
             return self._page.content()
         except PlaywrightTimeoutError as exc:
             raise RuntimeError(f"Timeout loading {url}") from exc
@@ -213,6 +271,7 @@ class BookingScraper:
         star_match = re.search(r"(\d)\s*(?:out of 5|star)", card_html, re.IGNORECASE)
         star_rating = int(star_match.group(1)) if star_match else None
         price = self._extract_price(card_html)
+        validate_price(price)
         rooms = []
         if price is not None:
             rooms.append(RoomType(property_id=prop_id, room_name="Standard Room", nightly_price=price, currency=BOOKING_CURRENCY))
@@ -372,6 +431,7 @@ class BookingScraper:
         )
         self.conn.commit()
     def _upsert_property(self, prop: BookingProperty):
+        validate_coordinates(prop.latitude, prop.longitude)
         self._listings_seen += 1
         existing = self.conn.execute("SELECT property_id FROM booking_listings WHERE property_id = ?", (prop.property_id,)).fetchone()
         if existing:

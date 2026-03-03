@@ -1,28 +1,29 @@
 # Scraping
-pyairbnb>=0.0.8
-httpx[http2]>=0.27
-curl-cffi>=0.7
-playwright>=1.40
+pyairbnb==2.2.1              # >= 0.0.8
+httpx[http2]==0.28.1         # >= 0.27
+curl-cffi==0.14.0            # >= 0.7
+playwright==1.58.0           # >= 1.40
+playwright-stealth==1.0.6    # anti-detection patches
 
 # Database
 # SQLite is built-in; no extra package needed
 
 # Dashboard
-streamlit>=1.40
-streamlit-folium>=0.26
-folium>=0.18
-branca>=0.8
+streamlit==1.54.0            # >= 1.40
+streamlit-folium==0.26.2     # >= 0.26
+folium==0.20.0               # >= 0.18
+branca==0.8.2                # >= 0.8
 
 # Data processing
-pandas>=2.2
-numpy>=1.26
+pandas==2.3.3                # >= 2.2
+numpy==2.4.2                 # >= 1.26
 
 # Visualization (charts inside Streamlit)
-plotly>=5.24
+plotly==6.5.2                # >= 5.24
 
 # Excel export
-openpyxl>=3.1
+openpyxl==3.1.5              # >= 3.1
 
 # Utilities
-tenacity>=9.0
-python-dateutil>=2.9
+tenacity==9.1.4              # >= 9.0
+python-dateutil==2.9.0.post0 # >= 2.9
