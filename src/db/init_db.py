@@ -28,7 +28,7 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     db_path = db_path or DB_PATH
     if not db_path.exists():
         return init_database(db_path)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=60)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row

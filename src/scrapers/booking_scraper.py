@@ -435,13 +435,25 @@ class BookingScraper:
                 status = "partial"
             logger.info("Persisting %d properties to database...", len(properties))
             for idx, (prop, rooms) in enumerate(properties, start=1):
-                try:
-                    self._upsert_property(prop)
-                    if rooms:
-                        self._upsert_room_types(rooms)
-                        self._insert_price_history(rooms)
-                except Exception as exc:
-                    logger.error("Failed to persist property %s: %s", prop.property_id, exc)
+                for attempt in range(5):
+                    try:
+                        self._upsert_property(prop)
+                        if rooms:
+                            self._upsert_room_types(rooms)
+                            self._insert_price_history(rooms)
+                        break
+                    except sqlite3.OperationalError as exc:
+                        if "locked" in str(exc) and attempt < 4:
+                            import time
+                            wait = 2 ** attempt
+                            logger.warning("DB locked persisting %s, retry %d/4 in %ds", prop.property_id, attempt + 1, wait)
+                            time.sleep(wait)
+                        else:
+                            logger.error("Failed to persist property %s: %s", prop.property_id, exc)
+                            break
+                    except Exception as exc:
+                        logger.error("Failed to persist property %s: %s", prop.property_id, exc)
+                        break
                 if idx % 10 == 0:
                     self.conn.commit()
             self.conn.commit()
