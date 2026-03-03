@@ -1,6 +1,6 @@
 # Lombok Market Intelligence
 
-Short-term rental market intelligence for Lombok, Indonesia. Scrapes Airbnb (and optionally Booking.com), infers occupancy from calendar diffs, computes ADR/RevPAR, and serves an interactive Streamlit dashboard with Folium maps.
+Short-term rental market intelligence for Lombok, Indonesia. Scrapes Airbnb and Booking.com, infers occupancy from calendar diffs, computes ADR/RevPAR/seasonality, and serves an interactive Streamlit dashboard with Folium maps.
 
 ## Quick Reference
 
@@ -12,6 +12,8 @@ python main.py --analyze           # Analysis only
 python main.py --dashboard         # Launch Streamlit dashboard
 python -m src.export_excel         # Excel export only
 python -m src.scrapers.airbnb_scraper  # Airbnb scraper standalone
+python -m src.db.archive           # Archive snapshots >180 days
+pytest tests/                      # Run test suite (27 tests)
 ```
 
 ## Project Structure
@@ -20,43 +22,91 @@ python -m src.scrapers.airbnb_scraper  # Airbnb scraper standalone
 main.py                          # CLI orchestrator (--scrape, --analyze, --dashboard)
 src/
   config.py                      # Zone bounding boxes, scrape delays, shared constants
-  utils.py                       # setup_logger, assign_zone, rate_limit, now_iso
-  export_excel.py                # DB → data/lombok_intel.xlsx (7 sheets)
+  utils.py                       # setup_logger, assign_zone, rate_limit, now_iso,
+                                 #   validate_coordinates, validate_price, notify_telegram
+  export_excel.py                # DB → data/lombok_intel.xlsx (11 sheets)
   db/
     schema.sql                   # 12 tables, 19 indexes, 10 views
-    init_db.py                   # init_database(), get_connection()
+    init_db.py                   # init_database(), get_connection() — PRAGMA busy_timeout=30s
+    archive.py                   # Move calendar_snapshots >180 days to data/archive/
   scrapers/
-    airbnb_scraper.py            # AirbnbScraper — pyairbnb GraphQL v3
-    booking_scraper.py           # BookingScraper — httpx/GraphQL (NOT YET TESTED)
+    airbnb_scraper.py            # AirbnbScraper — pyairbnb GraphQL v3 (tenacity retries)
+    booking_scraper.py           # BookingScraper — Playwright + stealth (tenacity, UA rotation)
   pipeline/
     occupancy_engine.py          # OccupancyEngine — calendar diff → occupancy_events
-    adr_calculator.py            # ADRCalculator — ADR, RevPAR, forward curves, seasonality
+    adr_calculator.py            # ADRCalculator — ADR p25/median/p75, MoM growth, forward curves
   dashboard/
-    app.py                       # Streamlit + Folium interactive map dashboard
+    app.py                       # Streamlit + Folium interactive map dashboard (local DB only)
 data/
-  lombok_intel.db                # SQLite database (the persistent data store)
+  lombok_intel.db                # SQLite database (PROPRIETARY — never expose publicly)
   lombok_intel.xlsx              # Excel export (regenerated each run)
   lombok_zones.geojson           # 8 zone polygons for map rendering
+  logs/                          # Rotating log files (5MB, 5 backups)
+  archive/                       # Archived old calendar snapshots
+tests/
+  test_utils.py                  # 12 tests: zone assignment, validators
+  test_occupancy.py              # 3 tests: occupancy event classification
+  test_export.py                 # 2 tests: Excel output verification
+  test_scrapers.py               # 10 tests: safe_float, safe_int, bool_to_int
 docs/
   PRD.md                         # Full product requirements document
 .github/workflows/
-  scrape.yml                     # Daily GitHub Actions pipeline (needs fixes, see below)
+  scrape.yml                     # Daily GitHub Actions pipeline (2 AM UTC)
 ```
+
+## Data Protection
+
+**The database contains proprietary market intelligence. Never expose it publicly.**
+
+- DB backups are stored as private GitHub Actions artifacts (30-day retention)
+- No public GitHub Releases for DB files
+- Dashboard runs locally only (no Streamlit Cloud deployment with public DB download)
+- The `.db` file is committed to the repo — ensure the repo stays **private**
 
 ## Database
 
 SQLite at `data/lombok_intel.db`. Key tables:
 - **airbnb_listings** — master listing data (1,585 listings as of 2026-03-02)
-- **booking_listings** — Booking.com listings (Playwright-based scraper, bypasses AWS WAF)
-- **calendar_snapshots** — daily availability + price per listing per date (144,781 rows, 144,326 with prices as of 2026-03-03)
-- **occupancy_events** — inferred bookings from calendar diffs (empty — needs 2+ scrape runs, Day 2 via GitHub Actions)
-- **price_history** — point-in-time price snapshots (empty)
+- **booking_listings** — Booking.com listings (133 across 8 zones)
+- **calendar_snapshots** — daily availability + price per listing per date (144,781 rows)
+- **occupancy_events** — inferred bookings from calendar diffs (needs 2+ scrape runs)
+- **price_history** — point-in-time price snapshots
 - **zones** — 8 Lombok investment zones (GLI, SGG, NLB, MTR, KUT, TAA, SBK, SKT)
 - **scrape_runs** — audit trail for every scrape execution
 
 Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_by_zone`, `v_supply_growth`, `v_revpar_monthly`, `v_seasonality`, `v_scrape_health`, `v_all_listings`
 
 **Warning:** `v_adr_by_zone_month` uses PERCENTILE() which doesn't exist in base SQLite. Use `v_adr_simple` instead.
+
+## Hardening (implemented 2026-03-03)
+
+### Automation Reliability
+- Pinned dependencies in requirements.txt (exact versions)
+- SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
+- GitHub Actions: concurrency guard, snapshot validation, log artifacts, permissions block
+- API key fetch wrapped with tenacity retry (3 attempts, exponential backoff)
+- RotatingFileHandler logging (5MB/file, 5 backups, DEBUG to file, WARNING to console)
+
+### Scraper Robustness
+- Booking.com: tenacity retry on page loads (3 attempts, exponential backoff)
+- Airbnb: DB lock retry on upsert/insert operations
+- playwright-stealth anti-detection, 6 weighted user agents, context rotation every 50 pages
+- Image/CSS/font blocking via Playwright route interception
+
+### Data Quality
+- validate_coordinates() and validate_price() in utils.py (warn-only, never drops data)
+- 11-sheet Excel export (includes Booking listings, calendar, combined zone summary)
+- Dashboard RevPAR uses real occupancy from v_revpar_monthly, 60% placeholder only when empty
+- ADR calculator outputs p25, median, p75 percentiles + MoM growth rate
+
+### Notifications & Monitoring
+- Telegram notify_telegram() helper (needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets)
+- GitHub Actions: success/failure Telegram alerts, weekly summary Issue (Mondays)
+- DB backup as private workflow artifact (30-day retention)
+
+### Testing & Maintenance
+- 27 tests in tests/ (all passing)
+- Database archival: src/db/archive.py moves snapshots >180 days to data/archive/
 
 ## 8 Investment Zones
 
@@ -73,28 +123,13 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 Zone assignment uses bounding boxes in `src/config.py` with priority-based overlap resolution (lower number wins).
 
-## Known Bugs & Blockers (as of 2026-03-03)
-
-### FIXED: Calendar prices are always NULL
-`pyairbnb.get_calendar()` returns `localPriceFormatted: null` for all days. **FIXED:** Falls back to listing's `nightly_price` from search results. 144,326 of 144,781 snapshots now have prices.
-
-### FIXED: No resume logic in calendar scraper
-**FIXED:** Checks `calendar_snapshots` for existing data with same `run_id` before scraping each listing.
-
-### FIXED: Scrape run #1 stuck in "running"
-**FIXED:** Cleaned up with SQL update.
-
-### FIXED: .gitignore blocks database commits
-**FIXED:** Added `!data/lombok_intel.db` and `!data/lombok_intel.xlsx` exceptions.
+## Known Issues
 
 ### pyairbnb get_details() Cookies bug
-`pyairbnb.get_details()` crashes with `'Cookies' object has no attribute 'isoformat'` on Python 3.14. The enrichment step (`_enrich_new_listings`) is disabled. Search data provides sufficient fields for MVP.
+`pyairbnb.get_details()` crashes with `'Cookies' object has no attribute 'isoformat'` on Python 3.14. Enrichment disabled. Search data provides sufficient fields.
 
-### GitHub Actions workflow — PUSHED (2026-03-03)
-Workflow file pushed successfully with full-scope token. Daily cron at 2 AM UTC. Includes Excel export step and failure notification job.
-
-### Occupancy engine returns 0 events
-Expected behavior — needs 2+ calendar scrape runs to detect availability transitions. Second run will happen automatically via GitHub Actions daily cron (2 AM UTC).
+### Occupancy engine needs 2+ runs
+Returns 0 events until at least 2 calendar scrape runs exist to detect availability transitions. Daily cron handles this automatically.
 
 ## pyairbnb API Reference (verified signatures)
 
@@ -121,9 +156,19 @@ Note: `localPriceFormatted` is ALWAYS null. Price data must come from search res
 
 ## Tech Stack
 - Python 3.14 (local venv at `.venv/`), target 3.12 for GitHub Actions
-- pyairbnb, httpx[http2], curl-cffi, playwright, pandas, numpy
+- pyairbnb, httpx[http2], curl-cffi, playwright, playwright-stealth, pandas, numpy, tenacity
 - Playwright + headless Chromium for Booking.com (bypasses AWS WAF)
 - Streamlit + Folium + Plotly for dashboard
-- SQLite (WAL mode) for data store
+- SQLite (WAL mode, busy_timeout=30s) for data store
 - openpyxl for Excel export
 - GitHub Actions for daily automation
+- Telegram bot for push notifications
+
+## GitHub Actions Secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token for notifications |
+| `TELEGRAM_CHAT_ID` | Telegram chat ID for notifications |
+
+`GITHUB_TOKEN` is provided automatically by GitHub Actions (used for artifact upload, issue creation, git push).

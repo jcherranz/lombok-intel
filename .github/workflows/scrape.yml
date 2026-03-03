@@ -10,6 +10,10 @@ concurrency:
   group: scrape-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: write
+  issues: write
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
@@ -82,33 +86,12 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      - name: Create DB backup release
-        run: |
-          DATE=$(date -u +%Y-%m-%d)
-          TAG="backup-${DATE}"
-          gzip -c data/lombok_intel.db > data/lombok_intel_${DATE}.db.gz
-          # Delete existing release for today (idempotent re-runs)
-          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" \
-            data/lombok_intel_${DATE}.db.gz \
-            --title "DB Backup ${DATE}" \
-            --notes "Automated daily database backup" \
-            --latest=false
-          rm data/lombok_intel_${DATE}.db.gz
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prune old backup releases (keep 30)
-        run: |
-          gh release list --limit 100 --json tagName,createdAt \
-            -q '[.[] | select(.tagName | startswith("backup-"))] | sort_by(.createdAt) | reverse | .[30:] | .[].tagName' \
-          | while read -r tag; do
-              echo "Deleting old backup: $tag"
-              gh release delete "$tag" --yes --cleanup-tag
-            done
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+      - name: Upload DB backup (private artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: data/lombok_intel.db
+          retention-days: 30
 
       - name: Commit updated data
         run: |

@@ -3,11 +3,8 @@
 Run with: streamlit run src/dashboard/app.py
 """
 
-import gzip
 import json
-import os
 import sqlite3
-import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -28,45 +25,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "lombok_intel.db"
 GEOJSON_PATH = PROJECT_ROOT / "data" / "lombok_zones.geojson"
 
-# GitHub repo for fetching releases (used on Streamlit Cloud)
-GITHUB_REPO = os.environ.get("GITHUB_REPO", "jcherranz/lombok-intel")
-
-# ---------------------------------------------------------------------------
-# Streamlit Cloud: auto-download DB from latest GitHub Release
-# ---------------------------------------------------------------------------
-
-_db_download_error = None
-
-def _download_db_from_release():
-    """Download the latest DB backup from GitHub Releases if local DB is missing."""
-    global _db_download_error
-    if DB_PATH.exists():
-        return
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import urllib.request
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
-        req = urllib.request.Request(api_url)
-        token = os.environ.get("GITHUB_TOKEN")
-        if token:
-            req.add_header("Authorization", f"token {token}")
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            releases = json.loads(resp.read())
-        for release in releases:
-            for asset in release.get("assets", []):
-                if asset["name"].endswith(".db.gz"):
-                    dl_url = asset["browser_download_url"]
-                    gz_path = DB_PATH.parent / asset["name"]
-                    urllib.request.urlretrieve(dl_url, gz_path)
-                    with gzip.open(gz_path, "rb") as f_in:
-                        DB_PATH.write_bytes(f_in.read())
-                    gz_path.unlink()
-                    return
-    except Exception as e:
-        _db_download_error = str(e)
-
-_download_db_from_release()
-
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -76,9 +34,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
-if _db_download_error:
-    st.warning(f"Could not download DB from GitHub Releases: {_db_download_error}")
 
 # ---------------------------------------------------------------------------
 # Database helpers
