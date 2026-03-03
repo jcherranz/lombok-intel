@@ -30,3 +30,6 @@ python-dateutil==2.9.0.post0 # >= 2.9
 
 # Testing
 pytest==8.4.1                # >= 8.0
+
+# Required by playwright-stealth (uses pkg_resources)
+setuptools>=75.0
