@@ -557,7 +557,6 @@ class BookingScraper:
                         break
                     except sqlite3.OperationalError as exc:
                         if "locked" in str(exc) and attempt < 4:
-                            import time
                             wait = 2 ** attempt
                             logger.warning("DB locked persisting %s, retry %d/4 in %ds", prop.property_id, attempt + 1, wait)
                             time.sleep(wait)

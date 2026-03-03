@@ -14,9 +14,11 @@ logger = setup_logger("export_excel")
 EXPORT_PATH = Path(__file__).resolve().parent.parent / "data" / "lombok_intel.xlsx"
 
 
-def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
+def export(db_path: Path = DB_PATH, out_path: Path = EXPORT_PATH):
     """Dump key tables and views into a single .xlsx with one sheet each."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path), timeout=30)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     try:
         return _export_inner(conn, out_path)
     finally:

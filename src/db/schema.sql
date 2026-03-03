@@ -431,29 +431,7 @@ WHERE oe.event_type = 'probable_booking'
 GROUP BY oe.source, oe.zone_id, strftime('%Y-%m', oe.event_date);
 
 
--- ADR (Average Daily Rate) from calendar snapshots for available-but-priced nights.
--- Covers the forward-looking price curve (dates still in the future).
-CREATE VIEW IF NOT EXISTS v_adr_by_zone_month AS
-SELECT
-    cs.source,
-    al.zone_id,
-    z.name                                          AS zone_name,
-    strftime('%Y-%m', cs.snapshot_date)             AS year_month,
-    COUNT(*)                                        AS priced_nights,
-    AVG(cs.price)                                   AS adr,
-    MIN(cs.price)                                   AS min_price,
-    MAX(cs.price)                                   AS max_price,
-    PERCENTILE(cs.price, 25)                        AS p25_price,  -- requires extension / app-level
-    PERCENTILE(cs.price, 75)                        AS p75_price
-FROM calendar_snapshots cs
-LEFT JOIN airbnb_listings al
-       ON cs.source = 'airbnb' AND cs.listing_id = al.listing_id
-LEFT JOIN zones z ON z.zone_id = al.zone_id
-WHERE cs.is_available = 1
-  AND cs.price IS NOT NULL
-GROUP BY cs.source, al.zone_id, strftime('%Y-%m', cs.snapshot_date);
-
--- Simpler ADR view without percentiles (SQLite base has no PERCENTILE function).
+-- ADR view with deduplication (no PERCENTILE — use v_adr_simple instead).
 -- Deduplicates overlapping scrape runs: keeps only the latest run per
 -- (source, listing_id, snapshot_date) to avoid double-counting.
 CREATE VIEW IF NOT EXISTS v_adr_simple AS

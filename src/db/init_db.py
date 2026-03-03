@@ -20,6 +20,7 @@ def init_database(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA synchronous = NORMAL")
+    conn.row_factory = sqlite3.Row
 
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
@@ -57,6 +58,10 @@ def _apply_migrations(conn: sqlite3.Connection):
     # we re-run the schema to pick up the new version.
     for view in ("v_adr_simple", "v_revpar_monthly"):
         conn.execute(f"DROP VIEW IF EXISTS {view}")
+
+    # M3: Remove broken v_adr_by_zone_month (uses non-existent PERCENTILE function)
+    conn.execute("DROP VIEW IF EXISTS v_adr_by_zone_month")
+
     # Re-apply schema to recreate views with new definitions
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
