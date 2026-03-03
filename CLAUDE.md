@@ -81,23 +81,31 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 ## Hardening (implemented 2026-03-03)
 
 ### Automation Reliability
-- Pinned dependencies in requirements.txt (exact versions)
+- Pinned dependencies in requirements.txt (exact versions, including pytest)
 - SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
 - GitHub Actions: concurrency guard, snapshot validation, log artifacts, permissions block
 - API key fetch wrapped with tenacity retry (3 attempts, exponential backoff)
 - RotatingFileHandler logging (5MB/file, 5 backups, DEBUG to file, WARNING to console)
+- **Strict failure signaling**: main.py exits non-zero if all scrapers fail, skips analysis on total scraper failure
+- **Booking scraper exits non-zero** when run as `__main__` and status is "failed"
+- **Workflow runs pytest** before scraping — regressions caught before data collection
 
 ### Scraper Robustness
 - Booking.com: tenacity retry on page loads (3 attempts, exponential backoff)
 - Airbnb: DB lock retry on upsert/insert operations
 - playwright-stealth anti-detection, 6 weighted user agents, context rotation every 50 pages
 - Image/CSS/font blocking via Playwright route interception
+- **Playwright try/finally cleanup** in _stop_browser and _rotate_context (prevents orphaned processes)
+- **Booking zone scan failure protection**: properties in failed zones are skipped (not written as "unavailable")
 
 ### Data Quality
 - validate_coordinates() and validate_price() in utils.py (warn-only, never drops data)
 - 11-sheet Excel export (includes Booking listings, calendar, combined zone summary)
 - Dashboard RevPAR uses real occupancy from v_revpar_monthly, 60% placeholder only when empty
 - ADR calculator outputs p25, median, p75 percentiles + MoM growth rate
+- **ADR dedup**: CTE with ROW_NUMBER keeps only latest run per (source, listing_id, snapshot_date)
+- **Source in listing-night key**: prevents ID collisions between Airbnb and Booking
+- **Occupancy events idempotent**: UNIQUE index + INSERT OR IGNORE prevents duplicate events on re-runs
 
 ### Notifications & Monitoring
 - Telegram notify_telegram() helper (needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets)
@@ -107,6 +115,8 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 ### Testing & Maintenance
 - 27 tests in tests/ (all passing)
 - Database archival: src/db/archive.py moves snapshots >180 days to data/archive/
+- **Archive uses chunked processing** (1000 rows at a time) to limit memory
+- **DB migrations**: init_db.py applies schema migrations once per process on first connection
 
 ## 8 Investment Zones
 
