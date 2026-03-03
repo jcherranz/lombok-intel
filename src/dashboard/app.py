@@ -46,7 +46,10 @@ def get_db():
         return None
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass  # WAL may fail on read-only mounts
     return conn
 
 
@@ -59,8 +62,10 @@ def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_geojson() -> dict:
-    """Load zone GeoJSON from disk."""
+def load_geojson() -> dict | None:
+    """Load zone GeoJSON from disk. Returns None if file is missing."""
+    if not GEOJSON_PATH.exists():
+        return None
     with open(GEOJSON_PATH) as f:
         return json.load(f)
 
@@ -234,7 +239,7 @@ def render_map(filters: dict):
     )
 
     # Color zones by ADR
-    if not zone_adr.empty:
+    if not zone_adr.empty and geojson_data is not None:
         adr_values = zone_adr["adr"].dropna()
         if len(adr_values) > 0:
             colormap = LinearColormap(
@@ -270,7 +275,7 @@ def render_map(filters: dict):
                 ).add_to(m)
 
             colormap.add_to(m)
-    else:
+    elif geojson_data is not None:
         # No ADR data yet — just show zone outlines
         for feature in geojson_data["features"]:
             fill = feature["properties"].get("fill_color", "#3388ff")

@@ -293,9 +293,9 @@ class ADRCalculator:
                 df_booked, on=["zone_id", "year_month"], how="left"
             )
             df["booked_nights"] = df["booked_nights"].fillna(0).astype(int)
-            df["occupancy_rate"] = df["booked_nights"] / df[
-                "total_nights"
-            ].replace(0, pd.NA)
+            df["occupancy_rate"] = (
+                df["booked_nights"] / df["total_nights"].replace(0, pd.NA)
+            ).clip(upper=1.0)
 
             df = df.sort_values(["zone_id", "year_month"]).reset_index(
                 drop=True

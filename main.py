@@ -51,9 +51,10 @@ def run_scrapers() -> bool:
     return any_success
 
 
-def run_analysis():
-    """Run occupancy inference and ADR calculations."""
+def run_analysis() -> bool:
+    """Run occupancy inference and ADR calculations. Returns True if all succeeded."""
     logger.info("=== Starting analysis pipeline ===")
+    all_ok = True
 
     try:
         logger.info("Running occupancy inference...")
@@ -63,6 +64,7 @@ def run_analysis():
         logger.info("Occupancy inference completed.")
     except Exception as e:
         logger.error(f"Occupancy inference failed: {e}")
+        all_ok = False
 
     try:
         logger.info("Running ADR calculator...")
@@ -72,6 +74,9 @@ def run_analysis():
         logger.info("ADR calculation completed.")
     except Exception as e:
         logger.error(f"ADR calculator failed: {e}")
+        all_ok = False
+
+    return all_ok
 
 
 def launch_dashboard():
@@ -102,14 +107,16 @@ def main():
         if not run_scrapers():
             has_errors = True
     elif args.analyze:
-        run_analysis()
+        if not run_analysis():
+            has_errors = True
     else:
         # Full pipeline — skip analysis if all scrapers failed
         if not run_scrapers():
             has_errors = True
             logger.warning("Skipping analysis — no successful scrape.")
         else:
-            run_analysis()
+            if not run_analysis():
+                has_errors = True
 
     # Export Excel snapshot
     try:
@@ -118,6 +125,7 @@ def main():
         export()
     except Exception as e:
         logger.error(f"Excel export failed: {e}")
+        has_errors = True
 
     if has_errors:
         logger.error("=== Pipeline finished with errors ===")

@@ -4,6 +4,7 @@ Moves snapshots older than a configurable number of days (default: 180)
 to a separate SQLite archive database in data/archive/.
 """
 
+import fcntl
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -24,12 +25,25 @@ def archive_old_snapshots(
     """Move calendar_snapshots older than retention_days to archive DB.
 
     Processes in chunks of CHUNK_SIZE to avoid memory pressure on large tables.
+    Uses a file lock to prevent concurrent archive operations.
     Returns the number of rows archived.
     """
     db_path = db_path or DB_PATH
     archive_dir = db_path.parent / "archive"
     cutoff = (date.today() - timedelta(days=retention_days)).isoformat()
 
+    # Prevent concurrent archive operations
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = archive_dir / ".archive.lock"
+    lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        logger.warning("Another archive operation is running — skipping.")
+        lock_file.close()
+        return 0
+
+    archive_conn = None
     conn = get_connection(db_path)
     try:
         # Count rows to archive
@@ -44,8 +58,7 @@ def archive_old_snapshots(
 
         logger.info("Archiving %d snapshots older than %s...", count, cutoff)
 
-        # Create archive directory and DB
-        archive_dir.mkdir(parents=True, exist_ok=True)
+        # Create archive DB
         archive_db = archive_dir / f"snapshots_before_{cutoff}.db"
         archive_conn = sqlite3.connect(str(archive_db))
         archive_conn.execute("PRAGMA busy_timeout = 30000")
@@ -95,14 +108,17 @@ def archive_old_snapshots(
             total_archived += len(rows)
             logger.info("  Archived chunk: %d rows (%d total)", len(rows), total_archived)
 
-        archive_conn.close()
         logger.info(
             "Archived %d snapshots to %s", total_archived, archive_db.name
         )
         return total_archived
 
     finally:
+        if archive_conn is not None:
+            archive_conn.close()
         conn.close()
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 
 if __name__ == "__main__":

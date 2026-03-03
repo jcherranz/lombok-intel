@@ -380,9 +380,16 @@ class OccupancyEngine:
                 how="inner",
             )
 
-            # Detect room count changes (available_rooms decreased = booked)
-            merged["rooms_prev"] = merged["available_rooms_prev"].fillna(0)
-            merged["rooms_curr"] = merged["available_rooms_curr"].fillna(0)
+            # Detect room count changes (available_rooms decreased = booked).
+            # Skip rows where either side is NULL — we can't infer a
+            # transition if we don't know the previous or current state.
+            has_both = (
+                merged["available_rooms_prev"].notna()
+                & merged["available_rooms_curr"].notna()
+            )
+            merged = merged[has_both].copy()
+            merged["rooms_prev"] = merged["available_rooms_prev"].astype(int)
+            merged["rooms_curr"] = merged["available_rooms_curr"].astype(int)
 
             transitions = merged[
                 merged["rooms_prev"] != merged["rooms_curr"]

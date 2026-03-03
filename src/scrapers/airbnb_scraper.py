@@ -838,8 +838,20 @@ class AirbnbScraper:
                 logger.warning("No listings to scrape calendars for.")
 
             # Determine final status
-            status = "completed" if not self._errors else "partial"
-            error_msg = "; ".join(self._errors[:20]) if self._errors else None
+            if self._snapshots_added == 0 and self._listings_seen == 0:
+                status = "failed"
+                error_msg = "No listings found and no snapshots collected"
+            elif self._snapshots_added == 0:
+                status = "partial"
+                error_msg = f"Found {self._listings_seen} listings but collected 0 snapshots"
+                if self._errors:
+                    error_msg += "; " + "; ".join(self._errors[:20])
+            elif self._errors:
+                status = "partial"
+                error_msg = "; ".join(self._errors[:20])
+            else:
+                status = "completed"
+                error_msg = None
             self._finish_run(run_id, status=status, error_message=error_msg)
 
         except KeyboardInterrupt:

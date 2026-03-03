@@ -17,7 +17,13 @@ EXPORT_PATH = Path(__file__).resolve().parent.parent / "data" / "lombok_intel.xl
 def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
     """Dump key tables and views into a single .xlsx with one sheet each."""
     conn = sqlite3.connect(db_path)
+    try:
+        return _export_inner(conn, out_path)
+    finally:
+        conn.close()
 
+
+def _export_inner(conn, out_path: Path) -> Path:
     sheets = {
         "Listings": """
             SELECT listing_id, name, property_type, zone_id, latitude, longitude,
@@ -108,7 +114,6 @@ def export(db_path: str = DB_PATH, out_path: Path = EXPORT_PATH):
             except Exception as e:
                 logger.warning("  %s: skipped (%s)", sheet_name, e)
 
-    conn.close()
     logger.info("Excel exported → %s", out_path)
     return out_path
 

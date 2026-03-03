@@ -435,20 +435,26 @@ class BookingScraper:
                 if remaining_unassigned:
                     skip_ids.update(unassigned)
                 logger.warning("Skipping %d properties in failed zones: %s", len(skip_ids), failed_zone_ids)
+            # Only write snapshots for properties we actually saw in
+            # the availability scan.  Properties not found are ambiguous
+            # (could be booked OR simply not returned by search) — writing
+            # them as "unavailable" would poison the occupancy model.
             for property_id in property_ids:
                 if property_id in skip_ids:
                     continue
                 hit = day_available.get(property_id)
-                snapshots.append(
-                    AvailabilitySnapshot(
-                        property_id=property_id,
-                        snapshot_date=checkin,
-                        is_available=hit is not None,
-                        price=hit[0] if hit else None,
-                        currency=BOOKING_CURRENCY,
-                        available_rooms=hit[1] if hit else 0,
+                if hit is not None:
+                    # Property found in search → available
+                    snapshots.append(
+                        AvailabilitySnapshot(
+                            property_id=property_id,
+                            snapshot_date=checkin,
+                            is_available=True,
+                            price=hit[0],
+                            currency=BOOKING_CURRENCY,
+                            available_rooms=hit[1],
+                        )
                     )
-                )
         logger.info("Collected %d availability snapshots", len(snapshots))
         return snapshots
     def _create_scrape_run(self, run_type: str = "full") -> int:
@@ -492,10 +498,20 @@ class BookingScraper:
             ("booking", snap.property_id, self.run_id, snap.snapshot_date, now_iso(), 1 if snap.is_available else 0, snap.price, snap.currency, snap.available_rooms)
             for snap in snapshots
         ]
-        self.conn.executemany(
-            "INSERT OR IGNORE INTO calendar_snapshots (source, listing_id, run_id, snapshot_date, scraped_at, is_available, price, currency, available_rooms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
+        for attempt in range(5):
+            try:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO calendar_snapshots (source, listing_id, run_id, snapshot_date, scraped_at, is_available, price, currency, available_rooms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc) and attempt < 4:
+                    wait = 2 ** attempt
+                    logger.warning("DB locked inserting snapshots, retry %d/4 in %ds", attempt + 1, wait)
+                    time.sleep(wait)
+                else:
+                    raise
         self._snapshots_added += len(rows)
         logger.info("Inserted %d calendar snapshots", len(rows))
     def _insert_price_history(self, rooms: list[RoomType]):
