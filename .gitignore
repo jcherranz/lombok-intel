@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 *.db
+!data/lombok_intel.db
+*.xlsx
+!data/lombok_intel.xlsx
 .DS_Store
 .venv/
 venv/

@@ -624,8 +624,20 @@ class AirbnbScraper:
 
         conn = self._get_conn()
 
+        # Cache listing prices for fallback (pyairbnb calendar returns null prices)
+        price_cache: dict[str, float | None] = {}
+
         for i, lid in enumerate(listing_ids, 1):
             try:
+                # Resume logic: skip listings already scraped in this run
+                already = conn.execute(
+                    "SELECT COUNT(*) FROM calendar_snapshots WHERE source='airbnb' AND listing_id=? AND run_id=?",
+                    (lid, run_id),
+                ).fetchone()[0]
+                if already > 0:
+                    logger.debug("Skipping listing %s (already has %d snapshots in run %d)", lid, already, run_id)
+                    continue
+
                 cal_data = self._fetch_calendar(lid)
                 if not cal_data:
                     logger.debug("No calendar data for listing %s", lid)
@@ -656,12 +668,21 @@ class AirbnbScraper:
                             continue
 
                         is_available = bool(day.get("available", False))
-                        # Price may be nested under price.localPriceFormatted or a direct value
+                        # Price: try calendar data first
                         price_data = day.get("price", {})
                         if isinstance(price_data, dict):
                             price = _safe_float(price_data.get("localPriceFormatted") or price_data.get("amount"))
                         else:
                             price = _safe_float(price_data)
+                        # Fallback: pyairbnb calendar returns null prices,
+                        # so use listing's base nightly_price from search results
+                        if price is None:
+                            if lid not in price_cache:
+                                row = conn.execute(
+                                    "SELECT nightly_price FROM airbnb_listings WHERE listing_id=?", (lid,)
+                                ).fetchone()
+                                price_cache[lid] = row[0] if row else None
+                            price = price_cache[lid]
 
                         self._insert_calendar_snapshot(lid, run_id, day_date, is_available, price)
                         count += 1

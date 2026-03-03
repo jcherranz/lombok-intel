@@ -95,6 +95,14 @@ def main():
         run_scrapers()
         run_analysis()
 
+    # Export Excel snapshot
+    try:
+        from src.export_excel import export
+        logger.info("Exporting Excel snapshot...")
+        export()
+    except Exception as e:
+        logger.error(f"Excel export failed: {e}")
+
     logger.info("=== Pipeline complete ===")
 
 
