@@ -105,6 +105,7 @@ jobs:
           git config user.email "actions@github.com"
           git add data/lombok_intel.db data/lombok_intel.xlsx
           git diff --staged --quiet || git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
+          git pull --rebase
           git push
 
       - name: Send Telegram notification (success)
