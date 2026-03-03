@@ -387,6 +387,13 @@ class OccupancyEngine:
                 merged["available_rooms_prev"].notna()
                 & merged["available_rooms_curr"].notna()
             )
+            null_count = len(merged) - has_both.sum()
+            if null_count > 0:
+                logger.warning(
+                    "Dropped %d/%d Booking rows with NULL available_rooms",
+                    null_count,
+                    len(merged),
+                )
             merged = merged[has_both].copy()
             merged["rooms_prev"] = merged["available_rooms_prev"].astype(int)
             merged["rooms_curr"] = merged["available_rooms_curr"].astype(int)

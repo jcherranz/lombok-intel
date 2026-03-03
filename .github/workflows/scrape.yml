@@ -53,9 +53,9 @@ jobs:
           python -c "
           import sqlite3
           conn = sqlite3.connect('data/lombok_intel.db')
-          # Check runs from this workflow execution (last 2 hours covers both scrapers)
+          # Check runs from this workflow execution (6-hour window covers full job timeout)
           rows = conn.execute(
-              \"SELECT run_id, source, COALESCE(snapshots_added, 0), status FROM scrape_runs WHERE started_at >= datetime('now', '-2 hours') ORDER BY run_id DESC\"
+              \"SELECT run_id, source, COALESCE(snapshots_added, 0), status FROM scrape_runs WHERE started_at >= datetime('now', '-6 hours') ORDER BY run_id DESC\"
           ).fetchall()
           if not rows:
               raise SystemExit('FAIL: no scrape runs found in this workflow execution')
@@ -63,7 +63,7 @@ jobs:
           for run_id, source, snaps, status in rows:
               print(f'Run #{run_id} ({source}): {snaps} snapshots, status={status}')
               total += snaps
-          print(f'Total snapshots this run: {total}')
+          print(f'Total snapshots this execution: {total}')
           if total == 0:
               raise SystemExit('FAIL: all runs added zero snapshots')
           "

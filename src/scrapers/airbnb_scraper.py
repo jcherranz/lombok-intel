@@ -779,7 +779,7 @@ class AirbnbScraper:
     # Main orchestration
     # ------------------------------------------------------------------
 
-    def run(self, run_type: str = "full") -> int:
+    def run(self, run_type: str = "full") -> dict:
         """Execute a complete scrape: discover listings, scrape calendars.
 
         Args:
@@ -789,7 +789,8 @@ class AirbnbScraper:
                 - calendar_only: skip discovery, scrape calendars for existing listings.
 
         Returns:
-            The run_id for this scrape session.
+            Summary dict with keys: run_id, status, listings_seen,
+            listings_new, snapshots_added, error_message.
         """
         # Reset counters
         self._listings_seen = 0
@@ -855,13 +856,23 @@ class AirbnbScraper:
             self._finish_run(run_id, status=status, error_message=error_msg)
 
         except KeyboardInterrupt:
+            status = "partial"
+            error_msg = "Interrupted by user"
             logger.warning("Run %d interrupted by user.", run_id)
-            self._finish_run(run_id, status="partial", error_message="Interrupted by user")
+            try:
+                self._finish_run(run_id, status="partial", error_message=error_msg)
+            except Exception:
+                logger.warning("Failed to persist run status after interrupt")
             raise
 
         except Exception as e:
+            status = "failed"
+            error_msg = str(e)
             logger.exception("Run %d failed with unhandled error: %s", run_id, e)
-            self._finish_run(run_id, status="failed", error_message=str(e))
+            try:
+                self._finish_run(run_id, status="failed", error_message=error_msg)
+            except Exception:
+                logger.warning("Failed to persist run status after error")
             raise
 
         finally:
@@ -869,7 +880,14 @@ class AirbnbScraper:
                 self.conn.close()
                 self.conn = None
 
-        return run_id
+        return {
+            "run_id": run_id,
+            "status": status,
+            "listings_seen": self._listings_seen,
+            "listings_new": self._listings_new,
+            "snapshots_added": self._snapshots_added,
+            "error_message": error_msg,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -905,11 +923,16 @@ if __name__ == "__main__":
     db_path = Path(args.db) if args.db else None
 
     scraper = AirbnbScraper(db_path=db_path, proxy_url=args.proxy)
-    run_id = scraper.run(run_type=args.run_type)
+    import sys
 
-    print(f"\nScrape run {run_id} finished.")
-    print(f"  Listings seen:    {scraper._listings_seen}")
-    print(f"  Listings new:     {scraper._listings_new}")
-    print(f"  Calendar entries: {scraper._snapshots_added}")
+    result = scraper.run(run_type=args.run_type)
+
+    print(f"\nScrape run #{result['run_id']} finished (status={result['status']}).")
+    print(f"  Listings seen:    {result['listings_seen']}")
+    print(f"  Listings new:     {result['listings_new']}")
+    print(f"  Calendar entries: {result['snapshots_added']}")
     if scraper._errors:
         print(f"  Errors:           {len(scraper._errors)}")
+    if result["status"] == "failed":
+        print(f"  FAILED: {result.get('error_message', 'unknown')}")
+        sys.exit(1)

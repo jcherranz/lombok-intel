@@ -51,6 +51,16 @@ def _apply_migrations(conn: sqlite3.Connection):
         ON occupancy_events (source, listing_id, event_date, prev_run_id, curr_run_id)
     """)
 
+    # M2: Recreate v_adr_simple and v_revpar_monthly with dedup CTEs (2026-03-03)
+    # DROP + CREATE replaces old non-deduped versions. Schema.sql has the
+    # updated definitions via CREATE VIEW IF NOT EXISTS, so after dropping
+    # we re-run the schema to pick up the new version.
+    for view in ("v_adr_simple", "v_revpar_monthly"):
+        conn.execute(f"DROP VIEW IF EXISTS {view}")
+    # Re-apply schema to recreate views with new definitions
+    schema_sql = SCHEMA_PATH.read_text()
+    conn.executescript(schema_sql)
+
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """Get a connection to an existing database."""

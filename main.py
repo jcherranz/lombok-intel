@@ -27,9 +27,12 @@ def run_scrapers() -> bool:
         logger.info("Running Airbnb scraper...")
         from src.scrapers.airbnb_scraper import AirbnbScraper
         airbnb = AirbnbScraper()
-        airbnb.run()
-        logger.info("Airbnb scraper completed.")
-        any_success = True
+        result = airbnb.run()
+        if result.get("status") == "failed":
+            logger.error(f"Airbnb scraper failed: {result.get('error_message')}")
+        else:
+            logger.info("Airbnb scraper completed (status=%s).", result.get("status"))
+            any_success = True
     except Exception as e:
         logger.error(f"Airbnb scraper failed: {e}")
 

@@ -105,6 +105,7 @@ def _export_inner(conn, out_path: Path) -> Path:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    failed_sheets = []
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         for sheet_name, query in sheets.items():
             try:
@@ -113,6 +114,11 @@ def _export_inner(conn, out_path: Path) -> Path:
                 logger.info("  %s: %d rows", sheet_name, len(df))
             except Exception as e:
                 logger.warning("  %s: skipped (%s)", sheet_name, e)
+                failed_sheets.append(sheet_name)
+
+    if failed_sheets:
+        logger.error("Excel export incomplete — failed sheets: %s", ", ".join(failed_sheets))
+        raise RuntimeError(f"Excel export incomplete: {', '.join(failed_sheets)} failed")
 
     logger.info("Excel exported → %s", out_path)
     return out_path

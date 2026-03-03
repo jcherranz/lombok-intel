@@ -251,7 +251,10 @@ class BookingScraper:
         if money:
             return self._to_float(money.group(1))
         fallback = re.search(r"\b(\d{2,}(?:[,.]\d{3})*(?:\.\d{2})?)\b", text)
-        return self._to_float(fallback.group(1) if fallback else None)
+        price = self._to_float(fallback.group(1) if fallback else None)
+        if price is None and context:
+            logger.info("Price extraction failed for card text: %.120s", text)
+        return price
     def _parse_property_card(self, card_html: str) -> tuple[BookingProperty | None, list[RoomType]]:
         prop_id = self._extract_property_id(card_html)
         if not prop_id:
@@ -533,6 +536,7 @@ class BookingScraper:
         self._snapshots_added = 0
         error_message = None
         status = "completed"
+        persist_errors = 0
         try:
             self._start_browser()
             today = date.today()
@@ -559,9 +563,11 @@ class BookingScraper:
                             time.sleep(wait)
                         else:
                             logger.error("Failed to persist property %s: %s", prop.property_id, exc)
+                            persist_errors += 1
                             break
                     except Exception as exc:
                         logger.error("Failed to persist property %s: %s", prop.property_id, exc)
+                        persist_errors += 1
                         break
                 if idx % 10 == 0:
                     self.conn.commit()
@@ -571,6 +577,11 @@ class BookingScraper:
             if snapshots:
                 self._insert_snapshots(snapshots)
                 self.conn.commit()
+            # Downgrade status if persistence errors occurred
+            if persist_errors > 0 and status == "completed":
+                status = "partial"
+                error_message = f"{persist_errors} properties failed to persist"
+                logger.warning(error_message)
         except KeyboardInterrupt:
             logger.warning("Scrape interrupted by user.")
             status = "partial"

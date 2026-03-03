@@ -454,8 +454,17 @@ WHERE cs.is_available = 1
 GROUP BY cs.source, al.zone_id, strftime('%Y-%m', cs.snapshot_date);
 
 -- Simpler ADR view without percentiles (SQLite base has no PERCENTILE function).
--- Safe to use without extensions.
+-- Deduplicates overlapping scrape runs: keeps only the latest run per
+-- (source, listing_id, snapshot_date) to avoid double-counting.
 CREATE VIEW IF NOT EXISTS v_adr_simple AS
+WITH deduped AS (
+    SELECT cs.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY cs.source, cs.listing_id, cs.snapshot_date
+               ORDER BY cs.run_id DESC
+           ) AS rn
+    FROM calendar_snapshots cs
+)
 SELECT
     cs.source,
     COALESCE(al.zone_id, bl.zone_id)               AS zone_id,
@@ -465,13 +474,13 @@ SELECT
     AVG(cs.price)                                   AS adr,
     MIN(cs.price)                                   AS min_nightly,
     MAX(cs.price)                                   AS max_nightly
-FROM calendar_snapshots cs
--- join to whichever source table owns this listing_id
+FROM deduped cs
 LEFT JOIN airbnb_listings  al ON cs.source = 'airbnb'  AND cs.listing_id = al.listing_id
 LEFT JOIN booking_listings bl ON cs.source = 'booking' AND cs.listing_id = bl.property_id
 LEFT JOIN zones z
        ON z.zone_id = COALESCE(al.zone_id, bl.zone_id)
-WHERE cs.is_available = 1
+WHERE cs.rn = 1
+  AND cs.is_available = 1
   AND cs.price IS NOT NULL
 GROUP BY cs.source, COALESCE(al.zone_id, bl.zone_id), strftime('%Y-%m', cs.snapshot_date);
 
@@ -524,11 +533,18 @@ GROUP BY l.source, l.zone_id, strftime('%Y-%m', l.first_scraped_at);
 
 
 -- RevPAR = ADR × occupancy rate.
--- Joined from v_adr_simple and v_occupancy_monthly. Approximate — occupancy
--- denominator here uses calendar_snapshots total observations as proxy
--- for listing-nights available; refine with actual listing counts if needed.
+-- Deduplicates overlapping scrape runs before computing metrics.
 CREATE VIEW IF NOT EXISTS v_revpar_monthly AS
-WITH avail AS (
+WITH deduped AS (
+    SELECT cs.*,
+           ROW_NUMBER() OVER (
+               PARTITION BY cs.source, cs.listing_id, cs.snapshot_date
+               ORDER BY cs.run_id DESC
+           ) AS rn
+    FROM calendar_snapshots cs
+    WHERE cs.snapshot_date < date('now')
+),
+avail AS (
     SELECT
         cs.source,
         COALESCE(al.zone_id, bl.zone_id)           AS zone_id,
@@ -537,10 +553,10 @@ WITH avail AS (
         SUM(CASE WHEN cs.is_available = 0 THEN 1 ELSE 0 END) AS blocked_nights,
         AVG(CASE WHEN cs.is_available = 1 AND cs.price IS NOT NULL
                  THEN cs.price END)                 AS adr
-    FROM calendar_snapshots cs
+    FROM deduped cs
     LEFT JOIN airbnb_listings  al ON cs.source = 'airbnb'  AND cs.listing_id = al.listing_id
     LEFT JOIN booking_listings bl ON cs.source = 'booking' AND cs.listing_id = bl.property_id
-    WHERE cs.snapshot_date < date('now')  -- only past dates for realized occupancy
+    WHERE cs.rn = 1
     GROUP BY cs.source, COALESCE(al.zone_id, bl.zone_id), strftime('%Y-%m', cs.snapshot_date)
 )
 SELECT
@@ -548,8 +564,8 @@ SELECT
     zone_id,
     year_month,
     adr,
-    CAST(blocked_nights AS REAL) / NULLIF(total_night_obs, 0) AS occupancy_rate,
-    adr * (CAST(blocked_nights AS REAL) / NULLIF(total_night_obs, 0)) AS revpar
+    MIN(CAST(blocked_nights AS REAL) / NULLIF(total_night_obs, 0), 1.0) AS occupancy_rate,
+    adr * MIN(CAST(blocked_nights AS REAL) / NULLIF(total_night_obs, 0), 1.0) AS revpar
 FROM avail;
 
 

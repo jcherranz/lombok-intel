@@ -84,12 +84,14 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 ### Automation Reliability
 - Pinned dependencies in requirements.txt (exact versions, including pytest + setuptools)
 - SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
-- GitHub Actions: concurrency guard, snapshot validation (2-hour window), log artifacts, permissions block
+- GitHub Actions: concurrency guard, snapshot validation (6-hour window matches job timeout), log artifacts, permissions block
 - API key fetch wrapped with tenacity retry (3 attempts, exponential backoff)
 - RotatingFileHandler logging (5MB/file, 5 backups, DEBUG to file, WARNING to console)
 - **Strict failure signaling**: main.py exits non-zero if all scrapers fail OR analysis/export fails
-- **Analysis failures propagated**: `run_analysis()` returns bool, failures set exit code
+- **Both scrapers return status dicts**: main.py checks `result["status"] == "failed"` for both Airbnb and Booking
+- **Airbnb scraper exits non-zero** when run as `__main__` and status is "failed"
 - **Booking scraper exits non-zero** when run as `__main__` and status is "failed"
+- **Booking persistence errors tracked**: downgrade run to "partial" if any property persistence fails
 - **Workflow runs pytest** before scraping — regressions caught before data collection
 
 ### Scraper Robustness
@@ -105,15 +107,16 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 ### Data Quality
 - validate_coordinates() and validate_price() in utils.py (warn-only, never drops data)
-- 11-sheet Excel export with try/finally on DB connection (includes Booking listings, calendar, combined zone summary)
+- 11-sheet Excel export with try/finally on DB connection; raises on failed sheets (includes Booking listings, calendar, combined zone summary)
 - Dashboard RevPAR uses real occupancy from v_revpar_monthly, 60% placeholder only when empty
 - Dashboard handles missing GeoJSON gracefully, PRAGMA failures don't crash on read-only mounts
 - ADR calculator outputs p25, median, p75 percentiles + MoM growth rate
-- **ADR dedup**: CTE with ROW_NUMBER keeps only latest run per (source, listing_id, snapshot_date)
+- **ADR dedup**: CTE with ROW_NUMBER keeps only latest run per (source, listing_id, snapshot_date) — applied in both Python calculator AND SQL views (v_adr_simple, v_revpar_monthly)
 - **Source in listing-night key**: prevents ID collisions between Airbnb and Booking
 - **Occupancy rate capped at 1.0**: `.clip(upper=1.0)` prevents >100% occupancy from data anomalies
 - **Occupancy events idempotent**: UNIQUE index + INSERT OR IGNORE prevents duplicate events on re-runs
-- **NULL room count handling**: occupancy engine skips rows with NULL available_rooms (no false transitions from fillna(0))
+- **NULL room count handling**: occupancy engine skips rows with NULL available_rooms (no false transitions from fillna(0)), logs drop count
+- **Booking price extraction logging**: logs when price regex fails for a property card
 
 ### Notifications & Monitoring
 - Telegram notify_telegram() helper (needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets)
