@@ -7,8 +7,8 @@ Short-term rental market intelligence for Lombok, Indonesia. Scrapes Airbnb and 
 ```bash
 source .venv/bin/activate          # Always activate venv first
 python main.py                     # Full pipeline: scrape + analyze + excel export
-python main.py --scrape            # Scrapers only
-python main.py --analyze           # Analysis only
+python main.py --scrape            # Scrapers + Excel export
+python main.py --analyze           # Analysis + Excel export
 python main.py --dashboard         # Launch Streamlit dashboard
 python -m src.export_excel         # Excel export only
 python -m src.scrapers.airbnb_scraper  # Airbnb scraper standalone
@@ -24,9 +24,9 @@ src/
   config.py                      # Zone bounding boxes, scrape delays, shared constants
   utils.py                       # setup_logger, assign_zone, rate_limit, now_iso,
                                  #   validate_coordinates, validate_price, notify_telegram
-  export_excel.py                # DB → data/lombok_intel.xlsx (11 sheets)
+  export_excel.py                # DB → data/lombok_intel.xlsx (10 sheets)
   db/
-    schema.sql                   # 12 tables, 19 indexes, 10 views
+    schema.sql                   # 10 tables, 20 indexes, 9 views
     init_db.py                   # init_database(), get_connection() — PRAGMA busy_timeout=30s
     archive.py                   # Move calendar_snapshots >180 days to data/archive/
   scrapers/
@@ -42,7 +42,7 @@ data/
   lombok_intel.xlsx              # Excel export (regenerated each run)
   lombok_zones.geojson           # 8 zone polygons for map rendering
   logs/                          # Rotating log files (5MB, 5 backups)
-  archive/                       # Archived old calendar snapshots
+  archive/                       # Archived old calendar snapshots (created on first archive run)
 tests/
   test_utils.py                  # 12 tests: zone assignment, validators
   test_occupancy.py              # 3 tests: occupancy event classification
@@ -67,9 +67,9 @@ docs/
 ## Database
 
 SQLite at `data/lombok_intel.db`. Key tables:
-- **airbnb_listings** — master listing data (1,585 listings as of 2026-03-02)
+- **airbnb_listings** — master listing data (1,585 listings as of 2026-03-04)
 - **booking_listings** — Booking.com listings (133 across 8 zones)
-- **calendar_snapshots** — daily availability + price per listing per date (144,781 rows)
+- **calendar_snapshots** — daily availability + price per listing per date (~159K rows)
 - **occupancy_events** — inferred bookings from calendar diffs (needs 2+ scrape runs)
 - **price_history** — point-in-time price snapshots
 - **zones** — 8 Lombok investment zones (GLI, SGG, NLB, MTR, KUT, TAA, SBK, SKT)
@@ -109,7 +109,7 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 ### Data Quality
 - validate_coordinates() and validate_price() in utils.py (warn-only, never drops data)
-- 11-sheet Excel export with try/finally on DB connection; WAL/busy_timeout PRAGMAs; raises on failed sheets (includes Booking listings, calendar, combined zone summary)
+- 10-sheet Excel export with try/finally on DB connection; WAL/busy_timeout PRAGMAs; raises on failed sheets (includes Booking listings, calendar, combined zone summary)
 - Dashboard RevPAR uses real occupancy from v_revpar_monthly, 60% placeholder only when empty
 - Dashboard handles missing GeoJSON gracefully, PRAGMA failures don't crash on read-only mounts
 - ADR calculator outputs p25, median, p75 percentiles + MoM growth rate
@@ -137,13 +137,13 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 | Code | Name | Priority |
 |------|------|----------|
 | GLI | Gili Islands | 10 |
+| KUT | Kuta / Mandalika | 10 |
 | SGG | Senggigi | 20 |
+| TAA | Tanjung Aan / Gerupuk | 20 |
+| SBK | Selong Belanak / West Surf | 20 |
 | NLB | North Lombok / Sire | 30 |
+| SKT | Sekotong | 30 |
 | MTR | Mataram | 40 |
-| KUT | Kuta / Mandalika | 50 |
-| TAA | Tanjung Aan / Gerupuk | 60 |
-| SBK | Selong Belanak / West Surf | 70 |
-| SKT | Sekotong | 80 |
 
 Zone assignment uses bounding boxes in `src/config.py` with priority-based overlap resolution (lower number wins).
 

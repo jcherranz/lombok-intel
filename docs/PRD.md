@@ -2,10 +2,21 @@
 ## Product: Lombok Market Intelligence
 ## Version: 1.0 (MVP)
 ## Date: March 2, 2026
-## Owner: Open-source community (initial maintainer: project founder)
+## Owner: Private project (proprietary data)
+
+> **Implementation Note (2026-03-04):** This PRD was written before implementation.
+> Key divergences from the actual build:
+> - **Data store**: SQLite (not DuckDB) — simpler, sufficient for the workload
+> - **Booking.com scraper**: Playwright + stealth HTML scraping (not httpx/GraphQL — blocked by AWS WAF)
+> - **Python version**: 3.12 in CI, 3.14 locally (not 3.11+)
+> - **Dashboard hosting**: Local only (not Streamlit Cloud — DB is proprietary)
+> - **Repo**: Private, not open-source (proprietary market data)
+> - **Zone assignment**: Bounding boxes with priority overlap (not point-in-polygon)
+>
+> See `CLAUDE.md` for the authoritative technical reference.
 
 ## 1. Executive Summary
-Lombok Market Intelligence is a free, open-source market data platform that continuously collects short-term rental data in Lombok, Indonesia from Airbnb and Booking.com, then transforms that raw supply and pricing data into decision-ready investment metrics.
+Lombok Market Intelligence is a proprietary market data platform that continuously collects short-term rental data in Lombok, Indonesia from Airbnb and Booking.com, then transforms that raw supply and pricing data into decision-ready investment metrics.
 
 The product addresses a specific gap in Lombok real estate underwriting: investors can estimate land and construction costs, but usually lack reliable, longitudinal data for occupancy and achievable room rates. By running daily data collection and occupancy inference pipelines, the system produces a proprietary local database of ADR, occupancy, RevPAR, seasonality, and supply trends across 8 custom investment zones.
 
