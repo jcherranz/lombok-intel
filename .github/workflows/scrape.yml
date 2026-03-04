@@ -27,10 +27,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.x"
+          enable-cache: true
+          cache-dependency-glob: "requirements.txt"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: uv pip install --system -r requirements.txt
+
+      - name: Verify critical imports
+        run: |
+          python -c "
+          from playwright_stealth import Stealth
+          s = Stealth()
+          assert hasattr(s, 'apply_stealth_sync'), 'Stealth API missing'
+          print('playwright-stealth OK')
+          "
 
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
@@ -43,9 +58,11 @@ jobs:
 
       - name: Run Airbnb scraper
         run: python -m src.scrapers.airbnb_scraper
+        timeout-minutes: 180
 
       - name: Run Booking.com scraper
-        run: python -m src.scrapers.booking_scraper
+        run: timeout --signal=SIGINT --kill-after=60 85m python -m src.scrapers.booking_scraper
+        timeout-minutes: 90
         continue-on-error: true
 
       - name: Validate scrape results
@@ -104,7 +121,8 @@ jobs:
           git config user.name "Lombok Intel Bot"
           git config user.email "actions@github.com"
           git add data/lombok_intel.db data/lombok_intel.xlsx
-          git diff --staged --quiet || git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
           git pull --rebase
           git push
 

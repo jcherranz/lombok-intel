@@ -3,7 +3,7 @@ pyairbnb==2.2.1              # >= 0.0.8
 httpx[http2]==0.28.1         # >= 0.27
 curl-cffi==0.14.0            # >= 0.7
 playwright==1.58.0           # >= 1.40
-playwright-stealth==1.0.6    # anti-detection patches
+playwright-stealth==2.0.2    # anti-detection patches (v2 dropped pkg_resources dep)
 
 # Database
 # SQLite is built-in; no extra package needed
@@ -30,6 +30,3 @@ python-dateutil==2.9.0.post0 # >= 2.9
 
 # Testing
 pytest==9.0.2                # >= 8.0
-
-# Required by playwright-stealth (uses pkg_resources, removed in setuptools 82)
-setuptools==81.0.0

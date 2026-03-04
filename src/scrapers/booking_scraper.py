@@ -112,7 +112,8 @@ class BookingScraper:
         return random.choice(_UA_POOL)
 
     def _start_browser(self):
-        from playwright_stealth import stealth_sync
+        from playwright_stealth import Stealth
+        self._stealth = Stealth()
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
         self._context = self._browser.new_context(
@@ -121,7 +122,7 @@ class BookingScraper:
             viewport={"width": 1920, "height": 1080},
         )
         self._page = self._context.new_page()
-        stealth_sync(self._page)
+        self._stealth.apply_stealth_sync(self._page)
         # Block images, CSS, fonts to reduce memory footprint
         self._page.route("**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2,ttf,eot}",
                          lambda route: route.abort())
@@ -155,7 +156,6 @@ class BookingScraper:
         time.sleep(random.uniform(1.0, 2.0))
     def _rotate_context(self):
         """Close current context and open a fresh one to prevent memory leaks."""
-        from playwright_stealth import stealth_sync
         try:
             if self._page and not self._page.is_closed():
                 self._page.close()
@@ -172,7 +172,7 @@ class BookingScraper:
             viewport={"width": 1920, "height": 1080},
         )
         self._page = self._context.new_page()
-        stealth_sync(self._page)
+        self._stealth.apply_stealth_sync(self._page)
         self._page.route("**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2,ttf,eot}",
                          lambda route: route.abort())
         logger.info("Browser context rotated (after %d page loads)", self._page_load_count)

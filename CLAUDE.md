@@ -94,8 +94,9 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 ## Hardening (implemented 2026-03-03)
 
 ### Automation Reliability
-- Pinned dependencies in requirements.txt (exact versions, including setuptools==81.0.0)
-- **setuptools pinned to 81.0.0**: v82 removed `pkg_resources` which `playwright-stealth` imports
+- Pinned dependencies in requirements.txt (exact versions)
+- **`uv` package manager** in GitHub Actions: strict constraint enforcement, no build-isolation leaks, 10-100x faster than pip
+- **playwright-stealth 2.0.2**: dropped `pkg_resources` dependency, no longer needs setuptools pin
 - **Workflow commit step**: `git pull --rebase` before push prevents rejection when repo changes during run
 - SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
 - GitHub Actions: concurrency guard, snapshot validation (6-hour window matches job timeout), log artifacts, permissions block
@@ -167,8 +168,8 @@ Zone assignment uses bounding boxes in `src/config.py` with priority-based overl
 ### Occupancy engine needs 2+ runs
 Returns 0 events until at least 2 calendar scrape runs exist to detect availability transitions. Daily cron handles this automatically.
 
-### playwright-stealth depends on deprecated pkg_resources
-`playwright-stealth` imports `pkg_resources` which was removed from `setuptools` v82. Pin: `setuptools==81.0.0`. When `playwright-stealth` releases a version without this dependency, the pin can be relaxed.
+### playwright-stealth 2.0.2 API change (RESOLVED)
+Upgraded from 1.0.6 to 2.0.2 which dropped `pkg_resources`. API changed: `stealth_sync(page)` → `Stealth().apply_stealth_sync(page)`. The `setuptools` pin was removed.
 
 ## pyairbnb API Reference (verified signatures)
 
@@ -195,7 +196,8 @@ Note: `localPriceFormatted` is ALWAYS null. Price data must come from search res
 
 ## Tech Stack
 - Python 3.14 (local venv at `.venv/`), target 3.12 for GitHub Actions
-- pyairbnb, httpx[http2], curl-cffi, playwright, playwright-stealth, pandas, numpy, tenacity
+- **uv** for dependency management in CI (strict constraints, fast installs)
+- pyairbnb, httpx[http2], curl-cffi, playwright, playwright-stealth 2.0.2, pandas, numpy, tenacity
 - Playwright + headless Chromium for Booking.com (bypasses AWS WAF)
 - Streamlit + Folium + Plotly for dashboard
 - SQLite (WAL mode, busy_timeout=30s) for data store
