@@ -2,6 +2,18 @@
 
 Short-term rental market intelligence for Lombok, Indonesia. Scrapes Airbnb and Booking.com, infers occupancy from calendar diffs, computes ADR/RevPAR/seasonality, and serves an interactive Streamlit dashboard with Folium maps.
 
+## GitHub Authentication
+
+Claude Code's Bash tool does NOT source `.bashrc`, so `gh` commands will fail with "Bad credentials" unless you source the token first. **Always run this before any `gh` command:**
+
+```bash
+source ~/.config/github/credentials.env
+```
+
+This exports `GITHUB_TOKEN` (classic PAT with all scopes). The file is loaded by `.bashrc` line 131 in interactive shells, but Claude Code runs non-interactive shells.
+
+If the token is expired, the user needs to generate a new one at https://github.com/settings/tokens/new and update `~/.config/github/credentials.env`.
+
 ## Quick Reference
 
 ```bash
