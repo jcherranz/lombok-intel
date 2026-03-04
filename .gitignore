@@ -9,6 +9,13 @@ __pycache__/
 .venv/
 venv/
 
+# SQLite runtime files
+*.db-wal
+*.db-shm
+
+# Archive lock
+data/archive/.archive.lock
+
 # Logs
 data/logs/
 *.log

@@ -94,8 +94,8 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 ## Hardening (implemented 2026-03-03)
 
 ### Automation Reliability
-- Pinned dependencies in requirements.txt (exact versions, including pytest + setuptools<82)
-- **setuptools capped at <82**: v82 removed `pkg_resources` which `playwright-stealth` imports
+- Pinned dependencies in requirements.txt (exact versions, including setuptools==81.0.0)
+- **setuptools pinned to 81.0.0**: v82 removed `pkg_resources` which `playwright-stealth` imports
 - **Workflow commit step**: `git pull --rebase` before push prevents rejection when repo changes during run
 - SQLite PRAGMA busy_timeout=30000 + synchronous=NORMAL in init_db.py
 - GitHub Actions: concurrency guard, snapshot validation (6-hour window matches job timeout), log artifacts, permissions block
@@ -168,7 +168,7 @@ Zone assignment uses bounding boxes in `src/config.py` with priority-based overl
 Returns 0 events until at least 2 calendar scrape runs exist to detect availability transitions. Daily cron handles this automatically.
 
 ### playwright-stealth depends on deprecated pkg_resources
-`playwright-stealth` imports `pkg_resources` which was removed from `setuptools` v82. Pin: `setuptools>=75.0,<82`. When `playwright-stealth` releases a version without this dependency, the pin can be relaxed.
+`playwright-stealth` imports `pkg_resources` which was removed from `setuptools` v82. Pin: `setuptools==81.0.0`. When `playwright-stealth` releases a version without this dependency, the pin can be relaxed.
 
 ## pyairbnb API Reference (verified signatures)
 
