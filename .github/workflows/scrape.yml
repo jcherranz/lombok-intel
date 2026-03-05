@@ -65,20 +65,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Attempting to restore DB from latest artifact..."
-          # Use --paginate to handle repos with many artifacts
-          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/artifacts \
-            --paginate \
-            --jq '[.artifacts[] | select(.name | startswith("db-backup-")) | select(.expired == false)] | sort_by(.created_at) | last | .id // empty' \
-            2>/dev/null | tail -1)
-          if [ -n "$ARTIFACT_ID" ] && [ "$ARTIFACT_ID" != "null" ]; then
-            echo "Downloading artifact $ARTIFACT_ID..."
-            gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip > db-artifact.zip
-            unzip -o db-artifact.zip -d data/
-            rm db-artifact.zip
-            ls -lh data/lombok_intel.db
-            echo "DB restored from artifact $ARTIFACT_ID"
+          # Find the most recent successful run of this workflow on main
+          LAST_RUN_ID=$(gh run list \
+            --workflow scrape.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [ -n "$LAST_RUN_ID" ]; then
+            echo "Downloading DB from run $LAST_RUN_ID..."
+            gh run download "$LAST_RUN_ID" \
+              --name "db-backup-$LAST_RUN_ID" \
+              --dir data/ 2>/dev/null || true
+            if [ -f "data/lombok_intel.db" ]; then
+              ls -lh data/lombok_intel.db
+              echo "DB restored from run $LAST_RUN_ID"
+            else
+              echo "Artifact download failed or expired"
+            fi
           elif [ -f "data/lombok_intel.db" ]; then
-            echo "No artifact found, but DB exists from checkout"
+            echo "No previous run found, but DB exists locally"
           else
             echo "No DB found, will initialize fresh"
           fi

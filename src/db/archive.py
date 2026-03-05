@@ -32,6 +32,10 @@ def prune_old_runs(
 
     Returns the number of rows deleted.
     """
+    if keep_runs < 1:
+        logger.error("keep_runs must be >= 1, got %d", keep_runs)
+        return 0
+
     db_path = db_path or DB_PATH
     conn = get_connection(db_path)
     total_deleted = 0
@@ -39,13 +43,14 @@ def prune_old_runs(
     try:
         for source in ("airbnb", "booking"):
             # Find run_ids that have snapshots, ordered newest first
+            # Use run_id DESC as tiebreaker for deterministic ordering
             runs_with_data = conn.execute(
                 """
                 SELECT DISTINCT cs.run_id
                 FROM calendar_snapshots cs
                 JOIN scrape_runs sr ON cs.run_id = sr.run_id
                 WHERE cs.source = ?
-                ORDER BY sr.started_at DESC
+                ORDER BY sr.started_at DESC, cs.run_id DESC
                 """,
                 (source,),
             ).fetchall()
