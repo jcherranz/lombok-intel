@@ -527,8 +527,8 @@ class BookingScraper:
                 "INSERT INTO price_history (source, listing_id, room_type_id, run_id, recorded_at, nightly_price, currency) VALUES ('booking', ?, ?, ?, ?, ?, ?)",
                 (room.property_id, room_type_id, self.run_id, now_iso(), room.nightly_price, room.currency),
             )
-    def run(self, run_type: str = "full") -> dict[str, Any]:
-        logger.info("Starting Booking.com scrape run (type=%s)", run_type)
+    def run(self, run_type: str = "full", skip_availability: bool = False) -> dict[str, Any]:
+        logger.info("Starting Booking.com scrape run (type=%s, skip_availability=%s)", run_type, skip_availability)
         self.conn = get_connection(self.db_path)
         self.run_id = self._create_scrape_run(run_type)
         self._listings_seen = 0
@@ -571,11 +571,14 @@ class BookingScraper:
                 if idx % 10 == 0:
                     self.conn.commit()
             self.conn.commit()
-            logger.info("Collecting %d-day availability snapshots...", CALENDAR_DAYS_FORWARD)
-            snapshots = self.scrape_availability(properties, days_forward=CALENDAR_DAYS_FORWARD)
-            if snapshots:
-                self._insert_snapshots(snapshots)
-                self.conn.commit()
+            if skip_availability:
+                logger.info("Skipping availability scan (--skip-availability)")
+            else:
+                logger.info("Collecting %d-day availability snapshots...", CALENDAR_DAYS_FORWARD)
+                snapshots = self.scrape_availability(properties, days_forward=CALENDAR_DAYS_FORWARD)
+                if snapshots:
+                    self._insert_snapshots(snapshots)
+                    self.conn.commit()
             # Downgrade status if persistence errors occurred
             if persist_errors > 0 and status == "completed":
                 status = "partial"
@@ -612,8 +615,19 @@ class BookingScraper:
         logger.info("=" * 60)
         return summary
 if __name__ == "__main__":
+    import argparse
     import sys
-    summary = BookingScraper().run()
+
+    parser = argparse.ArgumentParser(description="Booking.com scraper for Lombok Intel")
+    parser.add_argument(
+        "--skip-availability",
+        action="store_true",
+        help="Skip the availability scan (discovery + price only)",
+    )
+    args = parser.parse_args()
+
+    run_type = "discovery" if args.skip_availability else "full"
+    summary = BookingScraper().run(run_type=run_type, skip_availability=args.skip_availability)
     if summary.get("status") == "failed":
         print(f"Booking scraper FAILED: {summary.get('error_message', 'unknown')}")
         sys.exit(1)

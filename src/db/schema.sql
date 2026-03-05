@@ -56,7 +56,7 @@ INSERT OR IGNORE INTO zones (zone_id, name, description, lat_min, lat_max, lng_m
 CREATE TABLE IF NOT EXISTS scrape_runs (
     run_id          INTEGER     PRIMARY KEY AUTOINCREMENT,
     source          TEXT        NOT NULL CHECK (source IN ('airbnb', 'booking')),
-    run_type        TEXT        NOT NULL CHECK (run_type IN ('full', 'incremental', 'calendar_only')),
+    run_type        TEXT        NOT NULL CHECK (run_type IN ('full', 'incremental', 'calendar_only', 'discovery')),
     started_at      TEXT        NOT NULL DEFAULT (datetime('now')),
     finished_at     TEXT,
     status          TEXT        NOT NULL DEFAULT 'running'

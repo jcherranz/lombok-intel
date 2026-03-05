@@ -4,7 +4,12 @@ on:
   schedule:
     # Run daily at 2 AM UTC (9 AM WIB / Lombok time)
     - cron: '0 2 * * *'
-  workflow_dispatch: {}  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      run_booking:
+        description: 'Run Booking.com scraper (auto on Sundays)'
+        type: boolean
+        default: false
 
 concurrency:
   group: scrape-pipeline
@@ -13,6 +18,7 @@ concurrency:
 permissions:
   contents: write
   issues: write
+  actions: read
 
 jobs:
   scrape:
@@ -53,6 +59,30 @@ jobs:
       - name: Run tests
         run: pytest tests/ -x -q
 
+      - name: Restore DB from latest artifact
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Attempting to restore DB from latest artifact..."
+          # Use --paginate to handle repos with many artifacts
+          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/artifacts \
+            --paginate \
+            --jq '[.artifacts[] | select(.name | startswith("db-backup-")) | select(.expired == false)] | sort_by(.created_at) | last | .id // empty' \
+            2>/dev/null | tail -1)
+          if [ -n "$ARTIFACT_ID" ] && [ "$ARTIFACT_ID" != "null" ]; then
+            echo "Downloading artifact $ARTIFACT_ID..."
+            gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip > db-artifact.zip
+            unzip -o db-artifact.zip -d data/
+            rm db-artifact.zip
+            ls -lh data/lombok_intel.db
+            echo "DB restored from artifact $ARTIFACT_ID"
+          elif [ -f "data/lombok_intel.db" ]; then
+            echo "No artifact found, but DB exists from checkout"
+          else
+            echo "No DB found, will initialize fresh"
+          fi
+
       - name: Initialize database (if needed)
         run: python -m src.db.init_db
 
@@ -60,9 +90,23 @@ jobs:
         run: python -m src.scrapers.airbnb_scraper
         timeout-minutes: 180
 
-      - name: Run Booking.com scraper
-        run: timeout --signal=SIGINT --kill-after=60 85m python -m src.scrapers.booking_scraper
-        timeout-minutes: 90
+      - name: Determine if Booking should run
+        id: booking-check
+        run: |
+          DAY_OF_WEEK=$(date -u +%u)  # 7 = Sunday
+          MANUAL_BOOKING="${{ github.event.inputs.run_booking }}"
+          if [ "$DAY_OF_WEEK" = "7" ] || [ "$MANUAL_BOOKING" = "true" ]; then
+            echo "run_booking=true" >> $GITHUB_OUTPUT
+            echo "Booking.com scraper will run (day=$DAY_OF_WEEK, manual=$MANUAL_BOOKING)"
+          else
+            echo "run_booking=false" >> $GITHUB_OUTPUT
+            echo "Skipping Booking.com scraper (runs on Sundays or manual trigger)"
+          fi
+
+      - name: Run Booking.com scraper (discovery only)
+        if: steps.booking-check.outputs.run_booking == 'true'
+        run: python -m src.scrapers.booking_scraper --skip-availability
+        timeout-minutes: 60
         continue-on-error: true
 
       - name: Validate scrape results
@@ -70,23 +114,26 @@ jobs:
           python -c "
           import sqlite3
           conn = sqlite3.connect('data/lombok_intel.db')
-          # Check runs from this workflow execution (6-hour window covers full job timeout)
           rows = conn.execute(
               \"SELECT run_id, source, COALESCE(snapshots_added, 0), status FROM scrape_runs WHERE started_at >= datetime('now', '-6 hours') ORDER BY run_id DESC\"
           ).fetchall()
           if not rows:
               raise SystemExit('FAIL: no scrape runs found in this workflow execution')
-          total = 0
           for run_id, source, snaps, status in rows:
               print(f'Run #{run_id} ({source}): {snaps} snapshots, status={status}')
-              total += snaps
-          print(f'Total snapshots this execution: {total}')
-          if total == 0:
-              raise SystemExit('FAIL: all runs added zero snapshots')
+          # Require at least Airbnb data
+          airbnb_runs = [r for r in rows if r[1] == 'airbnb']
+          if not airbnb_runs or all(r[2] == 0 for r in airbnb_runs):
+              raise SystemExit('FAIL: Airbnb run added zero snapshots')
+          print('Validation passed')
           "
 
       - name: Run occupancy inference
         run: python -m src.pipeline.occupancy_engine
+        continue-on-error: true
+
+      - name: Prune old snapshots and VACUUM
+        run: python -m src.db.archive --mode prune --keep-runs 3
         continue-on-error: true
 
       - name: Run ADR calculator
@@ -94,10 +141,6 @@ jobs:
 
       - name: Export Excel snapshot
         run: python -m src.export_excel
-
-      - name: Archive old snapshots (180+ days)
-        run: python -m src.db.archive
-        continue-on-error: true
 
       - name: Upload logs
         if: always()
@@ -120,7 +163,7 @@ jobs:
         run: |
           git config user.name "Lombok Intel Bot"
           git config user.email "actions@github.com"
-          git add data/lombok_intel.db data/lombok_intel.xlsx
+          git add data/lombok_intel.xlsx
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "data: daily scrape $(date -u +%Y-%m-%d)"
           git pull --rebase
@@ -133,13 +176,16 @@ jobs:
           from src.utils import notify_telegram
           import sqlite3
           conn = sqlite3.connect('data/lombok_intel.db')
-          row = conn.execute('SELECT run_id, listings_seen, snapshots_added, status FROM scrape_runs ORDER BY run_id DESC LIMIT 1').fetchone()
-          airbnb = conn.execute('SELECT COUNT(*) FROM airbnb_listings WHERE is_active=1').fetchone()[0]
-          booking = conn.execute('SELECT COUNT(*) FROM booking_listings WHERE is_active=1').fetchone()[0]
-          msg = f'*Lombok Intel - Daily Scrape OK*\n'
-          msg += f'Run #{row[0]}: {row[1]} listings, {row[2]} snapshots\n'
-          msg += f'Active: {airbnb} Airbnb + {booking} Booking\n'
-          msg += f'Status: {row[3]}'
+          # Get per-source summary from this execution
+          runs = conn.execute(
+              \"SELECT source, run_id, COALESCE(listings_seen, 0), COALESCE(snapshots_added, 0), status FROM scrape_runs WHERE started_at >= datetime('now', '-6 hours') ORDER BY source\"
+          ).fetchall()
+          airbnb_active = conn.execute('SELECT COUNT(*) FROM airbnb_listings WHERE is_active=1').fetchone()[0]
+          booking_active = conn.execute('SELECT COUNT(*) FROM booking_listings WHERE is_active=1').fetchone()[0]
+          msg = '*Lombok Intel - Daily Scrape OK*\n'
+          for source, run_id, listings, snaps, status in runs:
+              msg += f'{source.title()} #{run_id}: {listings} listings, {snaps} snapshots ({status})\n'
+          msg += f'Active: {airbnb_active} Airbnb + {booking_active} Booking'
           notify_telegram(msg)
           "
         env:

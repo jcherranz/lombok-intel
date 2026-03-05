@@ -62,6 +62,42 @@ def _apply_migrations(conn: sqlite3.Connection):
     # M3: Remove broken v_adr_by_zone_month (uses non-existent PERCENTILE function)
     conn.execute("DROP VIEW IF EXISTS v_adr_by_zone_month")
 
+    # M4: Add 'discovery' to scrape_runs.run_type CHECK constraint (2026-03-05)
+    # SQLite doesn't support ALTER CHECK, so recreate the table.
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='scrape_runs'"
+    ).fetchone()
+    needs_table_rebuild = row and "discovery" not in row[0]
+
+    if needs_table_rebuild:
+        # Drop view that references scrape_runs to avoid errors during rebuild
+        # executescript auto-commits, which is needed for PRAGMA foreign_keys
+        conn.executescript("""
+            DROP VIEW IF EXISTS v_scrape_health;
+            PRAGMA foreign_keys = OFF;
+        """)
+        conn.execute("""
+            CREATE TABLE scrape_runs_new (
+                run_id          INTEGER     PRIMARY KEY AUTOINCREMENT,
+                source          TEXT        NOT NULL CHECK (source IN ('airbnb', 'booking')),
+                run_type        TEXT        NOT NULL CHECK (run_type IN ('full', 'incremental', 'calendar_only', 'discovery')),
+                started_at      TEXT        NOT NULL DEFAULT (datetime('now')),
+                finished_at     TEXT,
+                status          TEXT        NOT NULL DEFAULT 'running'
+                                            CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+                listings_seen   INTEGER     DEFAULT 0,
+                listings_new    INTEGER     DEFAULT 0,
+                snapshots_added INTEGER     DEFAULT 0,
+                error_message   TEXT,
+                notes           TEXT
+            )
+        """)
+        conn.execute("INSERT INTO scrape_runs_new SELECT * FROM scrape_runs")
+        conn.execute("DROP TABLE scrape_runs")
+        conn.execute("ALTER TABLE scrape_runs_new RENAME TO scrape_runs")
+        conn.commit()
+        conn.executescript("PRAGMA foreign_keys = ON;")
+
     # Re-apply schema to recreate views with new definitions
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)

@@ -24,7 +24,10 @@ python main.py --analyze           # Analysis + Excel export
 python main.py --dashboard         # Launch Streamlit dashboard
 python -m src.export_excel         # Excel export only
 python -m src.scrapers.airbnb_scraper  # Airbnb scraper standalone
-python -m src.db.archive           # Archive snapshots >180 days
+python -m src.scrapers.booking_scraper                # Booking full run
+python -m src.scrapers.booking_scraper --skip-availability  # Booking discovery only (price/supply)
+python -m src.db.archive                              # Archive snapshots >180 days
+python -m src.db.archive --mode prune --keep-runs 3   # Prune to last 3 runs per source + VACUUM
 pytest tests/                      # Run test suite (32 tests)
 ```
 
@@ -64,17 +67,18 @@ tests/
 docs/
   PRD.md                         # Full product requirements document
 .github/workflows/
-  scrape.yml                     # Daily GitHub Actions pipeline (2 AM UTC)
+  scrape.yml                     # Daily Airbnb + weekly Booking pipeline (2 AM UTC)
 ```
 
 ## Data Protection
 
 **The database contains proprietary market intelligence. Never expose it publicly.**
 
-- DB backups are stored as private GitHub Actions artifacts (30-day retention)
+- The `.db` file is **not committed to git** (gitignored) — stored as private GitHub Actions artifacts (30-day retention)
+- Each workflow run restores the latest DB artifact, then uploads an updated backup
 - No public GitHub Releases for DB files
 - Dashboard runs locally only (no Streamlit Cloud deployment with public DB download)
-- The `.db` file is committed to the repo — ensure the repo stays **private**
+- Ensure the repo stays **private**
 
 ## Database
 
@@ -135,12 +139,13 @@ Key views: `v_adr_simple`, `v_forward_rates`, `v_occupancy_monthly`, `v_supply_b
 
 ### Notifications & Monitoring
 - Telegram notify_telegram() helper (needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID secrets)
-- GitHub Actions: success/failure Telegram alerts, weekly summary Issue (Mondays)
-- DB backup as private workflow artifact (30-day retention)
+- GitHub Actions: per-source Telegram alerts, weekly summary Issue (Mondays)
+- DB backup as private workflow artifact (30-day retention), restored at start of each run
 
 ### Testing & Maintenance
 - 32 tests in tests/ (all passing)
-- Database archival: src/db/archive.py moves snapshots >180 days to data/archive/
+- Database pruning: `src/db/archive.py --mode prune --keep-runs 3` keeps last N runs per source, then VACUUMs
+- Database archival: `src/db/archive.py` moves snapshots >180 days to data/archive/ (date-based fallback)
 - **Archive uses chunked processing** (1000 rows at a time) to limit memory
 - **Archive concurrent operation guard**: fcntl file lock prevents parallel archive runs
 - **DB migrations**: init_db.py applies schema migrations once per process on first connection
@@ -167,6 +172,29 @@ Zone assignment uses bounding boxes in `src/config.py` with priority-based overl
 
 ### Occupancy engine needs 2+ runs
 Returns 0 events until at least 2 calendar scrape runs exist to detect availability transitions. Daily cron handles this automatically.
+
+### Booking.com occupancy inference disabled (2026-03-05)
+Booking.com scraper runs in **discovery-only mode** (`--skip-availability`) — collecting price/supply data but not calendar availability. Occupancy inference only works for Airbnb.
+
+**Why it's disabled:**
+- The 90-day availability scan (90 days × 8 zones × ~10s/page = 120+ min) exceeded the 85-minute CI timeout and never completed
+- The occupancy model is architecturally broken for Booking.com:
+  - The scraper only writes snapshots for properties *found* in search results (`is_available=True`)
+  - Fully booked properties simply don't appear in Booking.com search — no row is written
+  - The occupancy engine uses INNER JOIN between runs, so absent properties produce no transition
+  - `available_rooms` is always 1 for properties that do appear (no room-count signal)
+
+**Future fix (TODO):** To enable Booking.com occupancy:
+1. Revert to writing `is_available=False` for properties not found in search (the original behavior before audit commit `2edc3d9`)
+2. Switch the occupancy engine's Booking comparison from INNER JOIN to LEFT JOIN
+3. Classify "present in run N, absent in run N+1" as `probable_booking` (noisy but useful signal)
+4. Accept that "absent from search" is a weaker signal than Airbnb's calendar-based approach
+5. Reduce `days_forward` to ~21-30 to fit within CI timeout, or run availability on a separate longer schedule
+
+### Booking.com scraper schedule
+- **Daily (2 AM UTC):** Airbnb only — scrape + occupancy + ADR + export
+- **Weekly (Sundays):** Booking.com discovery-only (price/supply) + Airbnb
+- **Manual trigger:** Can force Booking run any day via `workflow_dispatch` with `run_booking: true`
 
 ### playwright-stealth 2.0.2 API change (RESOLVED)
 Upgraded from 1.0.6 to 2.0.2 which dropped `pkg_resources`. API changed: `stealth_sync(page)` → `Stealth().apply_stealth_sync(page)`. The `setuptools` pin was removed.

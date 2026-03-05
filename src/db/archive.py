@@ -1,7 +1,9 @@
-"""Archive old calendar_snapshots to keep the main database lean.
+"""Archive and prune calendar_snapshots to keep the main database lean.
 
-Moves snapshots older than a configurable number of days (default: 180)
-to a separate SQLite archive database in data/archive/.
+Two modes:
+  - archive: Moves snapshots older than N days to a separate SQLite file.
+  - prune:   Keeps only the last N snapshot-bearing runs per source,
+             deletes older snapshots, and runs VACUUM.
 """
 
 import fcntl
@@ -15,7 +17,84 @@ from src.utils import setup_logger
 logger = setup_logger("archive")
 
 DEFAULT_RETENTION_DAYS = 180
+DEFAULT_KEEP_RUNS = 3
 CHUNK_SIZE = 1000
+
+
+def prune_old_runs(
+    db_path: Path | None = None,
+    keep_runs: int = DEFAULT_KEEP_RUNS,
+) -> int:
+    """Delete calendar_snapshots from runs older than the last N per source.
+
+    Only counts runs that actually have snapshots in calendar_snapshots.
+    After deletion, runs VACUUM to reclaim disk space.
+
+    Returns the number of rows deleted.
+    """
+    db_path = db_path or DB_PATH
+    conn = get_connection(db_path)
+    total_deleted = 0
+
+    try:
+        for source in ("airbnb", "booking"):
+            # Find run_ids that have snapshots, ordered newest first
+            runs_with_data = conn.execute(
+                """
+                SELECT DISTINCT cs.run_id
+                FROM calendar_snapshots cs
+                JOIN scrape_runs sr ON cs.run_id = sr.run_id
+                WHERE cs.source = ?
+                ORDER BY sr.started_at DESC
+                """,
+                (source,),
+            ).fetchall()
+
+            run_ids = [r[0] for r in runs_with_data]
+            logger.info(
+                "%s: %d runs with snapshots, keeping %d",
+                source, len(run_ids), keep_runs,
+            )
+
+            if len(run_ids) <= keep_runs:
+                logger.info("%s: nothing to prune", source)
+                continue
+
+            # IDs to delete (older than the kept ones)
+            ids_to_delete = run_ids[keep_runs:]
+            placeholders = ",".join("?" for _ in ids_to_delete)
+
+            count = conn.execute(
+                f"SELECT COUNT(*) FROM calendar_snapshots WHERE source = ? AND run_id IN ({placeholders})",
+                [source] + ids_to_delete,
+            ).fetchone()[0]
+
+            if count == 0:
+                continue
+
+            logger.info(
+                "%s: deleting %d snapshots from %d old runs (run_ids: %s)",
+                source, count, len(ids_to_delete), ids_to_delete,
+            )
+
+            conn.execute(
+                f"DELETE FROM calendar_snapshots WHERE source = ? AND run_id IN ({placeholders})",
+                [source] + ids_to_delete,
+            )
+            conn.commit()
+            total_deleted += count
+
+        if total_deleted > 0:
+            logger.info("Pruned %d total snapshots. Running VACUUM...", total_deleted)
+            conn.execute("VACUUM")
+            logger.info("VACUUM complete.")
+        else:
+            logger.info("Nothing to prune.")
+
+        return total_deleted
+
+    finally:
+        conn.close()
 
 
 def archive_old_snapshots(
@@ -124,14 +203,30 @@ def archive_old_snapshots(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Archive old calendar snapshots")
+    parser = argparse.ArgumentParser(description="Archive/prune calendar snapshots")
+    parser.add_argument(
+        "--mode",
+        choices=["archive", "prune"],
+        default="archive",
+        help="Operation mode: 'archive' moves old snapshots to file, 'prune' deletes old runs + VACUUM (default: archive)",
+    )
     parser.add_argument(
         "--days",
         type=int,
         default=DEFAULT_RETENTION_DAYS,
-        help=f"Retain snapshots newer than N days (default: {DEFAULT_RETENTION_DAYS})",
+        help=f"(archive mode) Retain snapshots newer than N days (default: {DEFAULT_RETENTION_DAYS})",
+    )
+    parser.add_argument(
+        "--keep-runs",
+        type=int,
+        default=DEFAULT_KEEP_RUNS,
+        help=f"(prune mode) Keep last N snapshot-bearing runs per source (default: {DEFAULT_KEEP_RUNS})",
     )
     args = parser.parse_args()
 
-    archived = archive_old_snapshots(retention_days=args.days)
-    print(f"Archived {archived} snapshots.")
+    if args.mode == "prune":
+        deleted = prune_old_runs(keep_runs=args.keep_runs)
+        print(f"Pruned {deleted} snapshots.")
+    else:
+        archived = archive_old_snapshots(retention_days=args.days)
+        print(f"Archived {archived} snapshots.")
